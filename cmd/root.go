@@ -41,9 +41,8 @@ func newRoot() *cobra.Command {
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 	r := &cobra.Command{
-		Use: "gev", Short: "Typed semantic decisions for Unix pipelines and CI",
+		Use: "gev", Short: "Typed decisions for Unix pipelines and CI",
 		SilenceUsage: true, SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error { return inputError("a command is required") },
 	}
 	r.SetContext(context.WithValue(context.Background(), configContextKey{}, v))
 	r.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error { return inputError(err.Error()) })
