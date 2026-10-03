@@ -9,11 +9,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/coderabbit-demo/gev/engine"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-const schemaVersion = "1"
+const schemaVersion = engine.SchemaVersion
 
 type exitError struct {
 	code    int

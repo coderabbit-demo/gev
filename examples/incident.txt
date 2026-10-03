@@ -1,0 +1,3 @@
+At 09:14 UTC, an account signed in from a country the owner has never visited.
+Minutes later, the payout bank details were changed. The owner says they did
+not authorize either action and has requested an immediate security review.

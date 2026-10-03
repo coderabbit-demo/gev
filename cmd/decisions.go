@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/coderabbit-demo/gev/internal/gev"
+	"github.com/coderabbit-demo/gev/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +33,7 @@ func eval(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluatePredicate)
 }
 
-func evaluatePredicate(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluatePredicate(cmd *cobra.Command, _ []string, provider engine.Provider, maxBytes int) (decision, error) {
 	threshold, err := probabilityFlag(cmd, "threshold")
 	if err != nil {
 		return decision{}, err
@@ -42,47 +43,34 @@ func evaluatePredicate(cmd *cobra.Command, _ []string, provider gev.Provider, ma
 		return decision{}, err
 	}
 	questions := commandConfig(cmd).GetStringSlice("question")
-	if len(questions) == 0 || len(questions) > 255 {
-		return decision{}, inputError("eval requires between 1 and 255 --question flags")
-	}
-	requestQuestions := make(map[string]gev.Question, len(questions))
-	type namedQuestion struct{ name, instructions string }
-	ordered := make([]namedQuestion, 0, len(questions))
+	ordered := make([]engine.NamedQuestion, 0, len(questions))
 	for _, value := range questions {
 		name, instructions, ok := strings.Cut(value, "=")
 		name = strings.TrimSpace(name)
-		if !ok || name == "" || strings.TrimSpace(instructions) == "" {
+		if !ok {
 			return decision{}, inputError("--question must use NAME=INSTRUCTIONS with non-empty values")
 		}
-		if _, duplicate := requestQuestions[name]; duplicate {
-			return decision{}, inputError("question names must be unique")
-		}
-		requestQuestions[name] = gev.Question{Type: "noul", Instructions: instructions}
-		ordered = append(ordered, namedQuestion{name, instructions})
+		ordered = append(ordered, engine.NamedQuestion{Name: name, Instructions: instructions})
 	}
 	text, err := readInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	response, err := provider.Evaluate(cmd.Context(), text, requestQuestions)
+	result, err := engine.Eval(cmd.Context(), provider, text, ordered, engine.PredicateOptions{Threshold: threshold, UncertaintyMargin: margin})
 	if err != nil {
-		return decision{}, providerError()
+		return decision{}, decisionError(err)
 	}
 	results := make([]map[string]any, 0, len(questions))
 	lines := make([]string, 0, len(questions))
 	code := 0
-	for _, question := range ordered {
-		p := response.Answers[question.name]["noul"].(float64)
-		verdict := "false"
-		if math.Abs(p-threshold) < margin {
-			verdict, code = "uncertain", 3
-		} else if p >= threshold {
-			verdict = "true"
-		}
-		results = append(results, map[string]any{"id": question.name, "question": question.instructions, "verdict": verdict, "probability": p, "confidence": nil, "threshold": threshold})
-		lines = append(lines, fmt.Sprintf("%s %s probability=%.3f threshold=%.3f", question.name, strings.ToUpper(verdict), p, threshold))
+	if result.Uncertain {
+		code = 3
 	}
-	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "eval", "results": results, "model": response.Model, "usage": response.Usage}, human: strings.Join(lines, "\n")}, nil
+	for _, item := range result.Results {
+		results = append(results, map[string]any{"id": item.ID, "question": item.Question, "verdict": item.Verdict, "probability": item.Probability, "confidence": nil, "threshold": threshold})
+		lines = append(lines, fmt.Sprintf("%s %s probability=%.3f threshold=%.3f", item.ID, strings.ToUpper(item.Verdict), item.Probability, threshold))
+	}
+	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "eval", "results": results, "model": result.Model, "usage": result.Usage}, human: strings.Join(lines, "\n")}, nil
 }
 
 func newChoose() *cobra.Command {
@@ -95,7 +83,7 @@ func choose(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluateChoice)
 }
 
-func evaluateChoice(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluateChoice(cmd *cobra.Command, _ []string, provider engine.Provider, maxBytes int) (decision, error) {
 	min, err := probabilityFlag(cmd, "min-confidence")
 	if err != nil {
 		return decision{}, err
@@ -105,37 +93,28 @@ func evaluateChoice(cmd *cobra.Command, _ []string, provider gev.Provider, maxBy
 		return decision{}, inputError("choose requires --question")
 	}
 	values := commandConfig(cmd).GetStringSlice("option")
-	if len(values) < 2 || len(values) > 255 {
-		return decision{}, inputError("choose requires between 2 and 255 options")
-	}
-	options := map[string]string{}
+	options := make([]engine.NamedOption, 0, len(values))
 	for _, value := range values {
 		name, desc, ok := strings.Cut(value, "=")
-		if !ok || name == "" || desc == "" {
+		if !ok {
 			return decision{}, inputError("--option must use NAME=DESCRIPTION")
 		}
-		if _, duplicate := options[name]; duplicate {
-			return decision{}, inputError("option names must be unique")
-		}
-		options[name] = desc
+		options = append(options, engine.NamedOption{Name: name, Description: desc})
 	}
 	text, err := readInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	response, err := provider.Evaluate(cmd.Context(), text, map[string]gev.Question{"result": {Type: "choice", Instructions: question, Criteria: options}})
+	result, err := engine.Choose(cmd.Context(), provider, text, question, options, min)
 	if err != nil {
-		return decision{}, providerError()
+		return decision{}, decisionError(err)
 	}
-	answer := response.Answers["result"]
-	confidence, choice := answer["confidence"].(float64), answer["choice"].(string)
-	uncertain := confidence < min
 	code := 0
 	suffix := ""
-	if uncertain {
+	if result.Uncertain {
 		code, suffix = 3, " UNCERTAIN"
 	}
-	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "choose", "choice": choice, "probabilities": answer["probabilities"], "confidence": confidence, "min_confidence": min, "uncertain": uncertain, "model": response.Model, "usage": response.Usage}, human: fmt.Sprintf("%s confidence=%.3f%s", choice, confidence, suffix)}, nil
+	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "choose", "choice": result.Choice, "probabilities": result.Probabilities, "confidence": result.Confidence, "min_confidence": min, "uncertain": result.Uncertain, "model": result.Model, "usage": result.Usage}, human: fmt.Sprintf("%s confidence=%.3f%s", result.Choice, result.Confidence, suffix)}, nil
 }
 
 func newScore() *cobra.Command {
@@ -148,7 +127,7 @@ func score(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluateScore)
 }
 
-func evaluateScore(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluateScore(cmd *cobra.Command, _ []string, provider engine.Provider, maxBytes int) (decision, error) {
 	min, err := probabilityFlag(cmd, "min-confidence")
 	if err != nil {
 		return decision{}, err
@@ -158,31 +137,20 @@ func evaluateScore(cmd *cobra.Command, _ []string, provider gev.Provider, maxByt
 		return decision{}, inputError("score requires --question")
 	}
 	levels := commandConfig(cmd).GetStringSlice("level")
-	if len(levels) < 2 || len(levels) > 255 {
-		return decision{}, inputError("score requires between 2 and 255 levels")
-	}
-	for _, level := range levels {
-		if strings.TrimSpace(level) == "" {
-			return decision{}, inputError("levels must be non-empty")
-		}
-	}
 	text, err := readInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	response, err := provider.Evaluate(cmd.Context(), text, map[string]gev.Question{"result": {Type: "score", Instructions: question, Criteria: levels}})
+	result, err := engine.Score(cmd.Context(), provider, text, question, levels, min)
 	if err != nil {
-		return decision{}, providerError()
+		return decision{}, decisionError(err)
 	}
-	answer := response.Answers["result"]
-	confidence, score := answer["confidence"].(float64), answer["score"].(float64)
-	uncertain := confidence < min
 	code := 0
 	suffix := ""
-	if uncertain {
+	if result.Uncertain {
 		code, suffix = 3, " UNCERTAIN"
 	}
-	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "score", "score": score, "levels": levels, "probabilities": answer["probabilities"], "confidence": confidence, "min_confidence": min, "uncertain": uncertain, "model": response.Model, "usage": response.Usage}, human: fmt.Sprintf("score=%.3f confidence=%.3f%s", score, confidence, suffix)}, nil
+	return decision{code: code, value: map[string]any{"schema_version": schemaVersion, "command": "score", "score": result.Score, "levels": result.Levels, "probabilities": result.Probabilities, "confidence": result.Confidence, "min_confidence": min, "uncertain": result.Uncertain, "model": result.Model, "usage": result.Usage}, human: fmt.Sprintf("score=%.3f confidence=%.3f%s", result.Score, result.Confidence, suffix)}, nil
 }
 
 func newFilter() *cobra.Command {
@@ -195,7 +163,7 @@ func filter(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluateFilter)
 }
 
-func evaluateFilter(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluateFilter(cmd *cobra.Command, _ []string, provider engine.Provider, maxBytes int) (decision, error) {
 	threshold, err := probabilityFlag(cmd, "threshold")
 	if err != nil {
 		return decision{}, err
@@ -236,39 +204,16 @@ func evaluateFilter(cmd *cobra.Command, _ []string, provider gev.Provider, maxBy
 	if len(records) == 0 {
 		return decision{}, inputError("input contains no JSONL records")
 	}
-	state := map[string]any{}
-	questions := map[string]gev.Question{}
-	for i, record := range records {
-		var value any = record
-		if field != "" {
-			var found bool
-			value, found = record[field]
-			if !found {
-				return decision{}, inputError(fmt.Sprintf("record %d is missing field %q", i+1, field))
-			}
-		}
-		key := fmt.Sprintf("record_%d", i)
-		state[key] = value
-		questions[key] = gev.Question{Type: "noul", Instructions: fmt.Sprintf("For state field %s: %s", key, question)}
-	}
-	response, err := provider.Evaluate(cmd.Context(), state, questions)
+	result, err := engine.Filter(cmd.Context(), provider, records, question, field, engine.PredicateOptions{Threshold: threshold, UncertaintyMargin: margin})
 	if err != nil {
-		return decision{}, providerError()
+		return decision{}, decisionError(err)
 	}
 	raw := commandConfig(cmd).GetBool("raw")
 	out := []any{}
-	uncertain := false
-	for i, record := range records {
-		p := response.Answers[fmt.Sprintf("record_%d", i)]["noul"].(float64)
-		if math.Abs(p-threshold) < margin {
-			uncertain = true
-			continue
-		}
-		if p < threshold {
-			continue
-		}
+	for _, match := range result.Matches {
+		record := match.Record
 		if !raw {
-			record["_gev"] = map[string]any{"schema_version": schemaVersion, "probability": p, "threshold": threshold, "model": response.Model}
+			record["_gev"] = map[string]any{"schema_version": schemaVersion, "probability": match.Probability, "threshold": threshold, "model": result.Model}
 		}
 		out = append(out, record)
 	}
@@ -276,13 +221,13 @@ func evaluateFilter(cmd *cobra.Command, _ []string, provider gev.Provider, maxBy
 	if len(out) > 0 {
 		code = 0
 	}
-	if uncertain {
+	if result.Uncertain {
 		code = 3
 	}
 	return decision{code: code, jsonl: out}, nil
 }
 
-type runner func(*cobra.Command, []string, gev.Provider, int) (decision, error)
+type runner func(*cobra.Command, []string, engine.Provider, int) (decision, error)
 
 func run(cmd *cobra.Command, args []string, fn runner) error {
 	v := commandConfig(cmd)
@@ -302,12 +247,52 @@ func run(cmd *cobra.Command, args []string, fn runner) error {
 	if model == "" || url == "" {
 		return inputError("model and api-url must be non-empty")
 	}
-	provider := &gev.Client{Model: model, URL: url, Timeout: time.Duration(timeout * float64(time.Second)), Retries: retries}
+	provider := &engine.Client{Model: model, URL: url, Timeout: time.Duration(timeout * float64(time.Second)), Retries: retries}
+	policyPath := v.GetString("output-policy")
+	if cmd.Root().PersistentFlags().Changed("output-policy") && policyPath == "" {
+		return inputError("--output-policy requires a file path")
+	}
+	var outputPolicy *engine.OutputPolicy
+	if policyPath != "" {
+		file, err := os.Open(policyPath)
+		if err != nil {
+			return inputError("cannot read output policy: " + err.Error())
+		}
+		source, readErr := io.ReadAll(io.LimitReader(file, 1_000_001))
+		_ = file.Close()
+		if readErr != nil {
+			return inputError("cannot read output policy: " + readErr.Error())
+		}
+		outputPolicy, err = engine.CompileOutputPolicy(cmd.Context(), string(source))
+		if err != nil {
+			return inputError(err.Error())
+		}
+	}
 	result, err := fn(cmd, args, provider, maxBytes)
 	if err != nil {
 		return err
 	}
-	if !v.GetBool("quiet") {
+	if outputPolicy != nil {
+		data := result.value
+		command := cmd.Name()
+		if result.jsonl != nil {
+			data = result.jsonl
+		}
+		if payload, ok := result.value.(map[string]any); ok {
+			if canonical, ok := payload["command"].(string); ok {
+				command = canonical
+			}
+		}
+		filtered, err := outputPolicy.Apply(cmd.Context(), command, data)
+		if err != nil {
+			return inputError("output policy evaluation failed")
+		}
+		if !v.GetBool("quiet") && filtered != nil {
+			if err := renderPolicyOutput(cmd, command, filtered, v.GetBool("json")); err != nil {
+				return err
+			}
+		}
+	} else if !v.GetBool("quiet") {
 		if result.jsonl != nil {
 			for _, row := range result.jsonl {
 				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(row); err != nil {
@@ -326,6 +311,13 @@ func run(cmd *cobra.Command, args []string, fn runner) error {
 		return &exitError{code: result.code}
 	}
 	return nil
+}
+
+func decisionError(err error) error {
+	if errors.Is(err, engine.ErrInvalidInput) {
+		return inputError(strings.TrimPrefix(err.Error(), "invalid input: "))
+	}
+	return providerError()
 }
 
 func probabilityFlag(cmd *cobra.Command, name string) (float64, error) {

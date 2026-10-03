@@ -1,5 +1,5 @@
 PROJECT_NAME := gev
-PKG := gev
+PKG := github.com/coderabbit-demo/gev
 PKG_LIST := $(shell go list ${PKG}/... | grep -v /vendor/)
 GO_FILES := $(shell find . -name '*.go' | grep -v /vendor/ | grep -v _test.go)
 LOCAL_VERSION := $(shell if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git describe --exact-match --tags HEAD 2>/dev/null || git rev-parse --short HEAD; else echo dev; fi)

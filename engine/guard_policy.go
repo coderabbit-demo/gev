@@ -1,19 +1,18 @@
-package cmd
+package engine
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
 )
 
-// defaultGuardPolicy preserves the original guard rule order. --policy replaces
-// the whole module; it does not merge rules or thresholds with this default.
-var defaultGuardPolicy = `package gev.guard
+// DefaultGuardPolicy preserves the original guard rule order. Custom policy
+// source replaces this module rather than merging thresholds or rules with it.
+var DefaultGuardPolicy = `package gev.guard
 
 decision := {"route": "allow", "reason": "explicitly authorized low-risk action"} if {
     input.signals.consequence < 0.50
@@ -41,24 +40,20 @@ decision := {"route": "allow", "reason": "explicitly authorized low-risk action"
 }
 `
 
-func prepareGuardPolicy(ctx context.Context, path string) (rego.PreparedEvalQuery, error) {
-	source := defaultGuardPolicy
-	if path != "" {
-		file, err := os.ReadFile(path)
-		if err != nil {
-			return rego.PreparedEvalQuery{}, fmt.Errorf("cannot read guard policy: %w", err)
-		}
-		if len(file) == 0 || len(file) > 1_000_000 {
-			return rego.PreparedEvalQuery{}, errors.New("guard policy must be between 1 and 1,000,000 bytes")
-		}
-		source = string(file)
+// GuardPolicy is a compiled Rego policy suitable for repeated evaluations.
+type GuardPolicy struct{ prepared rego.PreparedEvalQuery }
+
+// CompileGuardPolicy validates policy source without reading files or calling a provider.
+func CompileGuardPolicy(ctx context.Context, source string) (*GuardPolicy, error) {
+	if len(source) == 0 || len(source) > 1_000_000 {
+		return nil, errors.New("guard policy must be between 1 and 1,000,000 bytes")
 	}
 	module, err := ast.ParseModule("guard.rego", source)
 	if err != nil {
-		return rego.PreparedEvalQuery{}, fmt.Errorf("invalid guard policy: %w", err)
+		return nil, fmt.Errorf("invalid guard policy: %w", err)
 	}
 	if module == nil {
-		return rego.PreparedEvalQuery{}, errors.New("guard policy is empty")
+		return nil, errors.New("guard policy is empty")
 	}
 	hasDecision := false
 	for _, rule := range module.Rules {
@@ -68,10 +63,25 @@ func prepareGuardPolicy(ctx context.Context, path string) (rego.PreparedEvalQuer
 		}
 	}
 	if !hasDecision {
-		return rego.PreparedEvalQuery{}, errors.New("guard policy must define data.gev.guard.decision")
+		return nil, errors.New("guard policy must define data.gev.guard.decision")
 	}
 	// Custom policies can use ordinary Rego builtins but cannot make outbound
 	// HTTP requests or DNS lookups during local policy evaluation.
+	capabilities := restrictedCapabilities()
+	policy := rego.New(
+		rego.Query("data.gev.guard.decision"),
+		rego.Module("guard.rego", source),
+		rego.Capabilities(capabilities),
+		rego.StrictBuiltinErrors(true),
+	)
+	prepared, err := policy.PrepareForEval(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("invalid guard policy: %w", err)
+	}
+	return &GuardPolicy{prepared: prepared}, nil
+}
+
+func restrictedCapabilities() *ast.Capabilities {
 	capabilities := ast.CapabilitiesForThisVersion()
 	capabilities.AllowNet = []string{}
 	builtins := capabilities.Builtins[:0]
@@ -81,21 +91,15 @@ func prepareGuardPolicy(ctx context.Context, path string) (rego.PreparedEvalQuer
 		}
 	}
 	capabilities.Builtins = builtins
-	policy := rego.New(
-		rego.Query("data.gev.guard.decision"),
-		rego.Module("guard.rego", source),
-		rego.Capabilities(capabilities),
-		rego.StrictBuiltinErrors(true),
-	)
-	prepared, err := policy.PrepareForEval(ctx)
-	if err != nil {
-		return rego.PreparedEvalQuery{}, fmt.Errorf("invalid guard policy: %w", err)
-	}
-	return prepared, nil
+	return capabilities
 }
 
-func evaluateGuardPolicy(ctx context.Context, policy rego.PreparedEvalQuery, signals map[string]any) (string, string, error) {
-	results, err := policy.Eval(ctx, rego.EvalInput(map[string]any{"signals": signals}))
+// Decide evaluates signals and rejects undefined or malformed routes.
+func (policy *GuardPolicy) Decide(ctx context.Context, signals map[string]any) (string, string, error) {
+	if policy == nil {
+		return "", "", errors.New("guard policy is required")
+	}
+	results, err := policy.prepared.Eval(ctx, rego.EvalInput(map[string]any{"signals": signals}))
 	if err != nil {
 		return "", "", err
 	}

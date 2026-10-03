@@ -15,11 +15,12 @@ func rootFlags(cmd *cobra.Command) {
 	flags.Bool("json", false, "machine-readable output (JSONL for filter)")
 	flags.Bool("quiet", false, "emit no output or diagnostics")
 	flags.String("config", "", "optional JSON configuration file")
+	flags.String("output-policy", "", "Rego policy file to filter the rendered result")
 }
 
 func bindRootFlags(cmd *cobra.Command) {
 	v := commandConfig(cmd)
-	for _, name := range []string{"model", "api-url", "timeout", "retries", "max-input-bytes", "json", "quiet", "config"} {
+	for _, name := range []string{"model", "api-url", "timeout", "retries", "max-input-bytes", "json", "quiet", "config", "output-policy"} {
 		_ = v.BindPFlag(name, cmd.Root().PersistentFlags().Lookup(name))
 	}
 }

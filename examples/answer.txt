@@ -1,0 +1,3 @@
+To reset your password, open Settings > Security > Reset Password. Follow the
+link sent to your account email address; it expires after 15 minutes. If you
+cannot access that email account, contact support to verify account ownership.

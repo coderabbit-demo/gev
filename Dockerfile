@@ -5,7 +5,7 @@ RUN apk update && apk upgrade && apk add --no-cache ca-certificates git
 RUN update-ca-certificates
 ADD . /app/
 ARG VERSION
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags="-s -w -X 'gev/cmd.Version=${VERSION}'" -o gev .
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags="-s -w -X 'github.com/coderabbit-demo/gev/cmd.Version=${VERSION}'" -o gev .
 
 FROM scratch
 

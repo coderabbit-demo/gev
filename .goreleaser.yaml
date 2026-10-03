@@ -13,7 +13,7 @@ builds:
     goarch:
       - amd64
       - arm64
-    ldflags: "-s -w -X 'gev/cmd.Version={{.Tag}}'"
+    ldflags: "-s -w -X 'github.com/coderabbit-demo/gev/cmd.Version={{.Tag}}'"
     flags:
       - -mod=vendor
 

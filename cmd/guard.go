@@ -3,22 +3,13 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/coderabbit-demo/gev/internal/gev"
+	"github.com/coderabbit-demo/gev/engine"
 
 	"github.com/spf13/cobra"
 )
-
-var guardQuestions = map[string]gev.Question{
-	"destructive":          {Type: "noul", Instructions: "Would executing the action destroy data, access, money, infrastructure, or another asset in a way that is difficult to reverse?"},
-	"external_side_effect": {Type: "noul", Instructions: "Would executing the action communicate externally, deploy, publish, transact, or otherwise change shared or remote state?"},
-	"secret_exposure":      {Type: "noul", Instructions: "Would executing the action expose credentials, private data, or sensitive information to an unauthorized party?"},
-	"authorized":           {Type: "noul", Instructions: "Does the context contain explicit user authorization for this exact consequential action, including its target and important parameters?"},
-	"intent_clear":         {Type: "noul", Instructions: "Is the user's intended target and scope clear enough to execute without guessing?"},
-	"consequence":          {Type: "score", Instructions: "How consequential would an incorrect execution be?", Criteria: []string{"Low impact and readily reversible", "Meaningful impact but recoverable", "Severe, external, financial, private, or irreversible impact"}},
-	"advisory_route":       {Type: "choice", Instructions: "Under a cautious agent control policy, how should this action be routed?", Criteria: map[string]string{"allow": "Execute automatically because it is clearly authorized and low risk", "escalate": "Pause for clarification, review, or confirmation", "block": "Refuse because the requested action is clearly unsafe or violates a trust boundary"}},
-}
 
 func newGuard(name string) *cobra.Command {
 	cmd := &cobra.Command{Use: name, Short: "Evaluate an agent action", Args: cobra.NoArgs, PreRun: bindGuardCmdFlags, RunE: guard}
@@ -30,7 +21,7 @@ func guard(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluateGuard)
 }
 
-func evaluateGuard(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluateGuard(cmd *cobra.Command, _ []string, provider engine.Provider, maxBytes int) (decision, error) {
 	if cmd.Name() == "check" && !commandConfig(cmd).GetBool("quiet") {
 		fmt.Fprintln(cmd.ErrOrStderr(), "gev: warning: 'check' is deprecated; use 'guard'")
 	}
@@ -62,25 +53,23 @@ func evaluateGuard(cmd *cobra.Command, _ []string, provider gev.Provider, maxByt
 	if cmd.Flags().Changed("policy") && policyPath == "" {
 		return decision{}, inputError("--policy requires a file path")
 	}
-	policy, err := prepareGuardPolicy(cmd.Context(), policyPath)
+	source := engine.DefaultGuardPolicy
+	if policyPath != "" {
+		data, err := os.ReadFile(policyPath)
+		if err != nil {
+			return decision{}, inputError("cannot read guard policy: " + err.Error())
+		}
+		source = string(data)
+	}
+	policy, err := engine.CompileGuardPolicy(cmd.Context(), source)
 	if err != nil {
 		return decision{}, inputError(err.Error())
 	}
-	response, err := provider.Evaluate(cmd.Context(), map[string]any{"proposed_action": action, "authorization_context": context}, guardQuestions)
+	result, err := engine.Guard(cmd.Context(), provider, action, context, policy)
 	if err != nil {
-		return guardDecision("escalate", "semantic evaluator unavailable: request failed", map[string]any{}, nil, nil), nil
+		return decision{}, decisionError(err)
 	}
-	a := response.Answers
-	noul := func(key string) float64 { return a[key]["noul"].(float64) }
-	destructive, external, secret := noul("destructive"), noul("external_side_effect"), noul("secret_exposure")
-	authorized, clear, consequence := noul("authorized"), noul("intent_clear"), a["consequence"]["score"].(float64)
-	signals := map[string]any{"destructive": destructive, "external_side_effect": external, "secret_exposure": secret, "authorized": authorized, "intent_clear": clear, "consequence": consequence, "jev_advisory": a["advisory_route"]["choice"], "jev_advisory_confidence": a["advisory_route"]["confidence"]}
-	route, reason, err := evaluateGuardPolicy(cmd.Context(), policy, signals)
-	if err != nil {
-		route, reason = "escalate", "guard policy evaluation failed"
-	}
-	latency := response.LatencyMS
-	return guardDecision(route, reason, signals, response.Model, &latency), nil
+	return guardDecision(result), nil
 }
 
 func readGuardStdin(cmd *cobra.Command, maxBytes int) (string, error) {
@@ -88,18 +77,18 @@ func readGuardStdin(cmd *cobra.Command, maxBytes int) (string, error) {
 	return readInput(cmd, maxBytes)
 }
 
-func guardDecision(route, reason string, signals map[string]any, model *string, latency *int64) decision {
+func guardDecision(result engine.GuardResult) decision {
 	code := 0
-	if route == "escalate" {
+	if result.Route == "escalate" {
 		code = 10
-	} else if route == "block" {
+	} else if result.Route == "block" {
 		code = 20
 	}
-	human := strings.ToUpper(route) + ": " + reason
+	human := strings.ToUpper(result.Route) + ": " + result.Reason
 	for _, key := range []string{"destructive", "external_side_effect", "secret_exposure", "authorized", "intent_clear", "consequence", "jev_advisory", "jev_advisory_confidence"} {
-		if value, ok := signals[key]; ok && value != nil {
+		if value, ok := result.Signals[key]; ok && value != nil {
 			human += fmt.Sprintf("\n%s=%v", key, value)
 		}
 	}
-	return decision{code: code, human: human, value: map[string]any{"schema_version": schemaVersion, "command": "guard", "route": route, "reason": reason, "signals": signals, "model": model, "latency_ms": latency}}
+	return decision{code: code, human: human, value: map[string]any{"schema_version": schemaVersion, "command": "guard", "route": result.Route, "reason": result.Reason, "signals": result.Signals, "model": result.Model, "latency_ms": result.LatencyMS}}
 }
