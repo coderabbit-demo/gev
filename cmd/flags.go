@@ -88,6 +88,7 @@ func bindScoreCmdFlags(cmd *cobra.Command, _ []string) { bindScoreFlags(cmd) }
 
 func filterFlags(cmd *cobra.Command) {
 	inputFlags(cmd)
+	cmd.Flags().String("question", "", "question instructions for each record")
 	cmd.Flags().String("field", "", "evaluate only this top-level record field")
 	cmd.Flags().Float64("threshold", .70, "matching probability threshold")
 	cmd.Flags().Float64("uncertainty-margin", .05, "uncertain region around the threshold")
@@ -99,7 +100,7 @@ func filterFlags(cmd *cobra.Command) {
 func bindFilterFlags(cmd *cobra.Command) {
 	bindInputFlags(cmd)
 	v := commandConfig(cmd)
-	for _, name := range []string{"field", "threshold", "uncertainty-margin", "max-records", "raw", "jsonl"} {
+	for _, name := range []string{"question", "field", "threshold", "uncertainty-margin", "max-records", "raw", "jsonl"} {
 		_ = v.BindPFlag(name, cmd.Flags().Lookup(name))
 	}
 }

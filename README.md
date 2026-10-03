@@ -28,11 +28,11 @@ TYPESAFE_API_KEY='...'
 cat ticket.txt | ./gev eval --question 'security=This is a security incident' --question 'urgent=This needs urgent attention' --threshold 0.7 --uncertainty-margin 0.05 --json
 cat ticket.txt | ./gev choose --question 'Which queue?' --option support='ordinary support' --option security='security incident' --json
 cat answer.txt | ./gev score --question 'How complete is this answer?' --level 'incomplete' --level 'complete' --json
-cat tickets.jsonl | ./gev filter 'This needs urgent attention' --field text
+cat tickets.jsonl | ./gev filter --question 'This needs urgent attention' --field text
 ./gev guard --action 'Delete production data' --context 'No exact approval' --json
 ```
 
-`eval`, `choose`, `score`, and `filter` accept exactly one input source: stdin (default), `--text`, or `--file`. `choose` and `score` require one plain `--question`; `eval` accepts repeatable named `--question NAME=INSTRUCTIONS` flags. Stdin supplies the content being judged, not the question. `filter` reads JSONL objects, preserves order, and adds `_gev` metadata to matching records; `--raw` omits that metadata. `guard` accepts `--action` with optional `--context`, or a stdin JSON object with `action` and `context`. `check` is a deprecated alias for `guard`.
+`eval`, `choose`, `score`, and `filter` accept exactly one input source: stdin (default), `--text`, or `--file`. `choose`, `score`, and `filter` require one plain `--question`; `eval` accepts repeatable named `--question NAME=INSTRUCTIONS` flags. Stdin supplies the content being judged, not the question. `filter` reads JSONL objects, preserves order, and adds `_gev` metadata to matching records; `--raw` omits that metadata. `guard` accepts `--action` with optional `--context`, or a stdin JSON object with `action` and `context`. `check` is a deprecated alias for `guard`.
 
 ### Guard policies
 
@@ -47,4 +47,3 @@ The [example policy](examples/guard.rego) returns `data.gev.guard.decision` as a
 `eval --json` emits an ordered `results` array with each question, ID, verdict (`true`, `false`, or `uncertain`), probability, and threshold. All questions share one provider request. Its exit code is `0` when every result is definite (including `false`), `3` if any is uncertain, `2` for invalid input, or `4` for provider failure. Other commands use `0` definite success/match, `1` false/no filter matches, `2` invalid input, `3` uncertain, and `4` provider failure. `guard` instead uses `0` allow, `10` escalate (including provider failure), `20` block, and `2` invalid input. JSON errors go to stderr; `--quiet` emits no diagnostics. The machine output uses `schema_version: "1"`.
 
 Run tests with `go test ./...`. No live API credentials are required for tests.
-

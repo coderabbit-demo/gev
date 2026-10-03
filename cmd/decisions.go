@@ -186,7 +186,7 @@ func evaluateScore(cmd *cobra.Command, _ []string, provider gev.Provider, maxByt
 }
 
 func newFilter() *cobra.Command {
-	cmd := &cobra.Command{Use: "filter CRITERION", Short: "Filter JSONL objects using a semantic predicate", Args: cobra.ExactArgs(1), PreRun: bindFilterCmdFlags, RunE: filter}
+	cmd := &cobra.Command{Use: "filter", Short: "Filter JSONL objects using a semantic predicate", Args: cobra.NoArgs, PreRun: bindFilterCmdFlags, RunE: filter}
 	filterFlags(cmd)
 	return cmd
 }
@@ -195,7 +195,7 @@ func filter(cmd *cobra.Command, args []string) error {
 	return run(cmd, args, evaluateFilter)
 }
 
-func evaluateFilter(cmd *cobra.Command, args []string, provider gev.Provider, maxBytes int) (decision, error) {
+func evaluateFilter(cmd *cobra.Command, _ []string, provider gev.Provider, maxBytes int) (decision, error) {
 	threshold, err := probabilityFlag(cmd, "threshold")
 	if err != nil {
 		return decision{}, err
@@ -203,6 +203,10 @@ func evaluateFilter(cmd *cobra.Command, args []string, provider gev.Provider, ma
 	margin, err := probabilityFlag(cmd, "uncertainty-margin")
 	if err != nil {
 		return decision{}, err
+	}
+	question := commandConfig(cmd).GetString("question")
+	if strings.TrimSpace(question) == "" {
+		return decision{}, inputError("filter requires --question")
 	}
 	maxRecords := commandConfig(cmd).GetInt("max-records")
 	if maxRecords <= 0 {
@@ -245,7 +249,7 @@ func evaluateFilter(cmd *cobra.Command, args []string, provider gev.Provider, ma
 		}
 		key := fmt.Sprintf("record_%d", i)
 		state[key] = value
-		questions[key] = gev.Question{Type: "noul", Instructions: fmt.Sprintf("For state field %s: %s", key, args[0])}
+		questions[key] = gev.Question{Type: "noul", Instructions: fmt.Sprintf("For state field %s: %s", key, question)}
 	}
 	response, err := provider.Evaluate(cmd.Context(), state, questions)
 	if err != nil {

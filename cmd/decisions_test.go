@@ -78,14 +78,48 @@ func TestChooseScoreFilter(t *testing.T) {
 		t.Errorf("score code=%d out=%s", code, out)
 	}
 	input := "{\"id\":1,\"text\":\"a\"}\n{\"id\":2,\"text\":\"b\"}\n{\"id\":3,\"text\":\"c\"}\n"
-	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.1},"record_2":{"noul":0.8}}}`), input, "filter", "match", "--field", "text")
+	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.1},"record_2":{"noul":0.8}}}`), input, "filter", "--question", "match", "--field", "text")
 	rows := strings.Split(strings.TrimSpace(out), "\n")
 	if code != 0 || len(rows) != 2 || !strings.Contains(rows[0], `"id":1`) || !strings.Contains(rows[1], `"id":3`) || !strings.Contains(out, `"_gev"`) {
 		t.Errorf("filter code=%d out=%s", code, out)
 	}
-	code, _, _, calls := invoke(t, answer(`{}`), input, "filter", "match", "--field", "missing")
+	code, _, _, calls := invoke(t, answer(`{}`), input, "filter", "--question", "match", "--field", "missing")
 	if code != 2 || calls != 0 {
 		t.Errorf("missing field code=%d calls=%d", code, calls)
+	}
+}
+
+func TestFilterRequiresQuestion(t *testing.T) {
+	for _, args := range [][]string{
+		{"filter"},
+		{"filter", "--question", " "},
+		{"filter", "positional"},
+	} {
+		code, _, _, calls := invoke(t, answer(`{}`), "{\"text\":\"a\"}\n", args...)
+		if code != 2 || calls != 0 {
+			t.Errorf("args=%v code=%d calls=%d", args, code, calls)
+		}
+	}
+}
+
+func TestFilterSendsQuestionForEachRecord(t *testing.T) {
+	code, out, _, calls := invoke(t, func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Questions map[string]struct {
+				Type         string `json:"type"`
+				Instructions string `json:"instructions"`
+			} `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.Questions) != 2 || request.Questions["record_0"].Instructions != "For state field record_0: urgent" || request.Questions["record_1"].Instructions != "For state field record_1: urgent" {
+			t.Errorf("unexpected filter questions: %+v", request.Questions)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.1}}}`))
+	}, "{\"text\":\"a\"}\n{\"text\":\"b\"}\n", "filter", "--question", "urgent", "--field", "text")
+	if code != 0 || calls != 1 || !strings.Contains(out, `"text":"a"`) || strings.Contains(out, `"text":"b"`) {
+		t.Errorf("code=%d calls=%d out=%s", code, calls, out)
 	}
 }
 
@@ -199,7 +233,7 @@ func TestCustomEndpointModelAndEvalQuestion(t *testing.T) {
 
 func TestFilterUncertainAndIntegerPreservation(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "test")
-	code, out, _, _ := invoke(t, answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.68}}}`), "{\"id\":9007199254740993}\n{\"id\":2}\n", "filter", "match", "--raw")
+	code, out, _, _ := invoke(t, answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.68}}}`), "{\"id\":9007199254740993}\n{\"id\":2}\n", "filter", "--question", "match", "--raw")
 	if code != 3 || !strings.Contains(out, "9007199254740993") || strings.Contains(out, `"_gev"`) {
 		t.Errorf("filter code=%d out=%s", code, out)
 	}
