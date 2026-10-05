@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -86,6 +90,130 @@ func TestChooseScoreFilter(t *testing.T) {
 	code, _, _, calls := invoke(t, answer(`{}`), input, "filter", "--question", "match", "--field", "missing")
 	if code != 2 || calls != 0 {
 		t.Errorf("missing field code=%d calls=%d", code, calls)
+	}
+}
+
+func TestFilterCSV(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "test")
+	input := "id,text\n00123,\"urgent, now\"\n00234,\"routine\nfollow-up\"\n"
+	provider := func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			State map[string]any `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.State["record_0"] != "urgent, now" || request.State["record_1"] != "routine\nfollow-up" {
+			t.Errorf("unexpected CSV field values: %#v", request.State)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.1}}}`))
+	}
+	code, out, _, calls := invoke(t, provider, input, "filter", "--input-format", "csv", "--question", "urgent", "--field", "text")
+	var record map[string]any
+	if err := json.Unmarshal([]byte(out), &record); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || calls != 1 || record["id"] != "00123" || record["text"] != "urgent, now" || record["_gev"] == nil || strings.Count(strings.TrimSpace(out), "\n") != 0 {
+		t.Errorf("CSV filter code=%d calls=%d out=%s", code, calls, out)
+	}
+
+	path := filepath.Join(t.TempDir(), "tickets.csv")
+	if err := os.WriteFile(path, []byte(input), 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _, calls = invoke(t, provider, "", "filter", "--file", path, "--input-format", "csv", "--question", "urgent", "--field", "text", "--raw")
+	if code != 0 || calls != 1 || strings.Contains(out, `"_gev"`) || !strings.Contains(out, `"id":"00123"`) {
+		t.Errorf("CSV file filter code=%d calls=%d out=%s", code, calls, out)
+	}
+}
+
+func TestFilterCSVInvalidInput(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "test")
+	for _, tc := range []struct {
+		name, input string
+		flags       []string
+	}{
+		{"unknown format", "text\nhi\n", []string{"--input-format=xml"}},
+		{"no records", "text\n", nil},
+		{"empty header", "text, \nhi,there\n", nil},
+		{"duplicate header", "text,text\nhi,there\n", nil},
+		{"short row", "id,text\n1\n", nil},
+		{"long row", "id,text\n1,hi,extra\n", nil},
+		{"bad quoting", "text\n\"unclosed\n", nil},
+		{"record limit", "text\nfirst\nsecond\n", []string{"--max-records", "1"}},
+		{"byte limit", "text\nfirst\n", []string{"--max-input-bytes", "5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"filter", "--question", "match", "--input-format", "csv"}
+			args = append(args, tc.flags...)
+			code, out, _, calls := invoke(t, answer(`{}`), tc.input, args...)
+			if code != 2 || calls != 0 || out != "" {
+				t.Errorf("code=%d calls=%d out=%q", code, calls, out)
+			}
+		})
+	}
+}
+
+func TestFilterCSVOutput(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "test")
+	provider := answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.1}}}`)
+	for _, tc := range []struct {
+		name, input string
+		flags       []string
+		header      []string
+		first       []string
+	}{
+		{"csv input raw", "text,id\n\"urgent, now\",00123\nroutine,00234\n", []string{"--input-format", "csv", "--raw"}, []string{"text", "id"}, []string{"urgent, now", "00123"}},
+		{"jsonl input raw", "{\"text\":\"urgent, now\",\"id\":1}\n{\"text\":\"routine\",\"id\":2}\n", []string{"--raw"}, []string{"id", "text"}, []string{"1", "urgent, now"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"filter", "--question", "match", "--output-format", "csv"}, tc.flags...)
+			code, out, _, calls := invoke(t, provider, tc.input, args...)
+			rows, err := csv.NewReader(strings.NewReader(out)).ReadAll()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code != 0 || calls != 1 || len(rows) != 2 || !slices.Equal(rows[0], tc.header) || !slices.Equal(rows[1], tc.first) {
+				t.Errorf("code=%d calls=%d rows=%v", code, calls, rows)
+			}
+		})
+	}
+
+	code, out, _, _ := invoke(t, provider, "text,id\nurgent,00123\nroutine,00234\n", "filter", "--question", "match", "--input-format", "csv", "--output-format", "csv")
+	rows, err := csv.NewReader(strings.NewReader(out)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || len(rows) != 2 || !slices.Equal(rows[0], []string{"text", "id", "_gev"}) || rows[1][0] != "urgent" || rows[1][1] != "00123" {
+		t.Errorf("metadata code=%d rows=%v", code, rows)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(rows[1][2]), &metadata); err != nil || metadata["probability"] != 0.9 {
+		t.Errorf("metadata=%v err=%v", metadata, err)
+	}
+	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.9}}}`), "text,id\n\"line one\n\"\"quoted\"\", next\",00123\n", "filter", "--question", "match", "--input-format", "csv", "--output-format", "csv", "--raw")
+	rows, err = csv.NewReader(strings.NewReader(out)).ReadAll()
+	if err != nil || code != 0 || len(rows) != 2 || rows[1][0] != "line one\n\"quoted\", next" {
+		t.Errorf("quoted CSV code=%d rows=%v err=%v", code, rows, err)
+	}
+
+	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.1}}}`), "text\nroutine\n", "filter", "--question", "match", "--input-format", "csv", "--output-format", "csv")
+	if code != 1 || out != "" {
+		t.Errorf("no matches code=%d out=%q", code, out)
+	}
+}
+
+func TestFilterCSVOutputInvalidFormat(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "test")
+	for _, flags := range [][]string{
+		{"--output-format", "xml"},
+		{"--output-format", "csv", "--json"},
+		{"--output-format", "csv", "--jsonl"},
+	} {
+		code, out, _, calls := invoke(t, answer(`{}`), "{\"text\":\"hi\"}\n", append([]string{"filter", "--question", "match"}, flags...)...)
+		if code != 2 || out != "" || calls != 0 {
+			t.Errorf("flags=%v code=%d out=%q calls=%d", flags, code, out, calls)
+		}
 	}
 }
 
