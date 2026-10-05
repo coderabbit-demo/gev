@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,10 +19,11 @@ import (
 )
 
 type decision struct {
-	code  int
-	value any
-	human string
-	jsonl []any
+	code    int
+	value   any
+	human   string
+	jsonl   []any
+	columns []string
 }
 
 func newEval() *cobra.Command {
@@ -154,7 +157,7 @@ func evaluateScore(cmd *cobra.Command, _ []string, provider engine.Provider, max
 }
 
 func newFilter() *cobra.Command {
-	cmd := &cobra.Command{Use: "filter", Short: "Filter JSONL objects using a semantic predicate", Args: cobra.NoArgs, PreRun: bindFilterCmdFlags, RunE: filter}
+	cmd := &cobra.Command{Use: "filter", Short: "Filter JSONL or CSV records using a semantic predicate", Args: cobra.NoArgs, PreRun: bindFilterCmdFlags, RunE: filter}
 	filterFlags(cmd)
 	return cmd
 }
@@ -180,29 +183,31 @@ func evaluateFilter(cmd *cobra.Command, _ []string, provider engine.Provider, ma
 	if maxRecords <= 0 {
 		return decision{}, inputError("--max-records must be positive")
 	}
+	format := commandConfig(cmd).GetString("input-format")
+	if format != "jsonl" && format != "csv" {
+		return decision{}, inputError("--input-format must be jsonl or csv")
+	}
+	outputFormat := commandConfig(cmd).GetString("output-format")
+	if outputFormat != "jsonl" && outputFormat != "csv" {
+		return decision{}, inputError("--output-format must be jsonl or csv")
+	}
+	if outputFormat == "csv" && (commandConfig(cmd).GetBool("json") || commandConfig(cmd).GetBool("jsonl")) {
+		return decision{}, inputError("--output-format csv cannot be combined with --json or --jsonl")
+	}
 	text, err := readInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
 	field := commandConfig(cmd).GetString("field")
 	var records []map[string]any
-	for lineNumber, line := range bytes.Split([]byte(text), []byte("\n")) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		if len(records) == maxRecords {
-			return decision{}, inputError("input exceeds --max-records")
-		}
-		var record map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(line))
-		decoder.UseNumber()
-		if decoder.Decode(&record) != nil || record == nil {
-			return decision{}, inputError(fmt.Sprintf("line %d must be a JSON object", lineNumber+1))
-		}
-		records = append(records, record)
+	var columns []string
+	if format == "csv" {
+		records, columns, err = parseCSVRecords(text, maxRecords)
+	} else {
+		records, err = parseJSONLRecords(text, maxRecords)
 	}
-	if len(records) == 0 {
-		return decision{}, inputError("input contains no JSONL records")
+	if err != nil {
+		return decision{}, err
 	}
 	result, err := engine.Filter(cmd.Context(), provider, records, question, field, engine.PredicateOptions{Threshold: threshold, UncertaintyMargin: margin})
 	if err != nil {
@@ -224,7 +229,143 @@ func evaluateFilter(cmd *cobra.Command, _ []string, provider engine.Provider, ma
 	if result.Uncertain {
 		code = 3
 	}
-	return decision{code: code, jsonl: out}, nil
+	return decision{code: code, jsonl: out, columns: columns}, nil
+}
+
+func parseJSONLRecords(text string, maxRecords int) ([]map[string]any, error) {
+	var records []map[string]any
+	for lineNumber, line := range bytes.Split([]byte(text), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		if len(records) == maxRecords {
+			return nil, inputError("input exceeds --max-records")
+		}
+		var record map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(line))
+		decoder.UseNumber()
+		if decoder.Decode(&record) != nil || record == nil {
+			return nil, inputError(fmt.Sprintf("line %d must be a JSON object", lineNumber+1))
+		}
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return nil, inputError("input contains no JSONL records")
+	}
+	return records, nil
+}
+
+func parseCSVRecords(text string, maxRecords int) ([]map[string]any, []string, error) {
+	reader := csv.NewReader(strings.NewReader(text))
+	headers, err := reader.Read()
+	if err != nil {
+		return nil, nil, inputError("invalid CSV header: " + err.Error())
+	}
+	seen := make(map[string]bool, len(headers))
+	for _, header := range headers {
+		if strings.TrimSpace(header) == "" {
+			return nil, nil, inputError("CSV headers must not be empty")
+		}
+		if seen[header] {
+			return nil, nil, inputError(fmt.Sprintf("duplicate CSV header %q", header))
+		}
+		seen[header] = true
+	}
+	var records []map[string]any
+	for {
+		values, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, inputError("invalid CSV record: " + err.Error())
+		}
+		if len(records) == maxRecords {
+			return nil, nil, inputError("input exceeds --max-records")
+		}
+		record := make(map[string]any, len(headers))
+		for i, header := range headers {
+			record[header] = values[i]
+		}
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return nil, nil, inputError("input contains no CSV records")
+	}
+	return records, headers, nil
+}
+
+func renderFilterRecords(cmd *cobra.Command, records []any, columns []string, format string) error {
+	if format == "jsonl" {
+		for _, record := range records {
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(record); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	// Build the entire CSV before writing, so an invalid policy result cannot
+	// cause partially rendered output.
+	rows := make([]map[string]any, 0, len(records))
+	seen := make(map[string]bool)
+	for _, column := range columns {
+		seen[column] = true
+	}
+	var additional []string
+	for _, value := range records {
+		row, ok := value.(map[string]any)
+		if !ok {
+			return inputError("CSV output requires object records")
+		}
+		rows = append(rows, row)
+		for key := range row {
+			if !seen[key] {
+				seen[key] = true
+				additional = append(additional, key)
+			}
+		}
+	}
+	sort.Strings(additional)
+	columns = append(append([]string(nil), columns...), additional...)
+	if len(columns) == 0 {
+		return inputError("CSV output requires records with fields")
+	}
+	var output bytes.Buffer
+	writer := csv.NewWriter(&output)
+	if err := writer.Write(columns); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		values := make([]string, len(columns))
+		for i, column := range columns {
+			value := row[column]
+			switch v := value.(type) {
+			case nil:
+			case string:
+				values[i] = v
+			case map[string]any, []any:
+				encoded, err := json.Marshal(v)
+				if err != nil {
+					return inputError("cannot encode CSV cell")
+				}
+				values[i] = string(encoded)
+			default:
+				values[i] = fmt.Sprint(v)
+			}
+		}
+		if err := writer.Write(values); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+	_, err := cmd.OutOrStdout().Write(output.Bytes())
+	return err
 }
 
 type runner func(*cobra.Command, []string, engine.Provider, int) (decision, error)
@@ -288,16 +429,24 @@ func run(cmd *cobra.Command, args []string, fn runner) error {
 			return inputError("output policy evaluation failed")
 		}
 		if !v.GetBool("quiet") && filtered != nil {
-			if err := renderPolicyOutput(cmd, command, filtered, v.GetBool("json")); err != nil {
+			if command == "filter" {
+				if rows, ok := filtered.([]any); ok {
+					if err := renderFilterRecords(cmd, rows, result.columns, v.GetString("output-format")); err != nil {
+						return err
+					}
+				} else if v.GetString("output-format") == "csv" {
+					return inputError("CSV output requires an array of object records")
+				} else if err := renderPolicyOutput(cmd, command, filtered, v.GetBool("json")); err != nil {
+					return err
+				}
+			} else if err := renderPolicyOutput(cmd, command, filtered, v.GetBool("json")); err != nil {
 				return err
 			}
 		}
 	} else if !v.GetBool("quiet") {
 		if result.jsonl != nil {
-			for _, row := range result.jsonl {
-				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(row); err != nil {
-					return err
-				}
+			if err := renderFilterRecords(cmd, result.jsonl, result.columns, v.GetString("output-format")); err != nil {
+				return err
 			}
 		} else if v.GetBool("json") {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result.value); err != nil {

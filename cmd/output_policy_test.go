@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/csv"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -52,6 +53,30 @@ func TestOutputPolicyFiltersJSONLAndKeepsOtherRenderers(t *testing.T) {
 	code, out, _, _ = invoke(t, answer(`{"answers":{"result":{"score":1,"probabilities":[0.1,0.9],"confidence":0.9}}}`), "data", "score", "--question", "How good?", "--level", "bad", "--level", "good", "--output-policy", path)
 	if code != 0 || !strings.Contains(out, "score=1.000") {
 		t.Errorf("score code=%d out=%s", code, out)
+	}
+}
+
+func TestOutputPolicyFiltersCSVOutput(t *testing.T) {
+	path := filepath.Join("..", "examples", "output.rego")
+	response := answer(`{"answers":{"record_0":{"noul":0.9},"record_1":{"noul":0.9}}}`)
+	args := []string{"filter", "--question", "match", "--input-format", "csv", "--output-format", "csv", "--raw", "--output-policy", path}
+	code, out, _, calls := invoke(t, response, "text,id\nfoo,1\nsafe,2\n", args...)
+	rows, err := csv.NewReader(strings.NewReader(out)).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || calls != 1 || len(rows) != 2 || rows[0][0] != "text" || rows[1][0] != "safe" {
+		t.Errorf("filtered CSV code=%d calls=%d rows=%v", code, calls, rows)
+	}
+	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.9}}}`), "text,id\nfoo,1\n", args...)
+	if code != 0 || out != "" {
+		t.Errorf("all hidden CSV code=%d out=%q", code, out)
+	}
+	path = outputPolicyPath(t, "package gev.output\nresult := {\"unexpected\": true}")
+	args[len(args)-1] = path
+	code, out, _, _ = invoke(t, answer(`{"answers":{"record_0":{"noul":0.9}}}`), "text,id\nsafe,2\n", args...)
+	if code != 2 || out != "" {
+		t.Errorf("invalid CSV policy shape code=%d out=%q", code, out)
 	}
 }
 

@@ -91,9 +91,11 @@ func filterFlags(cmd *cobra.Command) {
 	inputFlags(cmd)
 	cmd.Flags().String("question", "", "question instructions for each record")
 	cmd.Flags().String("field", "", "evaluate only this top-level record field")
+	cmd.Flags().String("input-format", "jsonl", "input format: jsonl or csv (CSV requires a header row)")
+	cmd.Flags().String("output-format", "jsonl", "output format: jsonl or csv")
 	cmd.Flags().Float64("threshold", .70, "matching probability threshold")
 	cmd.Flags().Float64("uncertainty-margin", .05, "uncertain region around the threshold")
-	cmd.Flags().Int("max-records", 1000, "maximum JSONL records")
+	cmd.Flags().Int("max-records", 1000, "maximum input records")
 	cmd.Flags().Bool("raw", false, "omit _gev metadata")
 	cmd.Flags().Bool("jsonl", false, "emit JSONL (default)")
 }
@@ -101,7 +103,7 @@ func filterFlags(cmd *cobra.Command) {
 func bindFilterFlags(cmd *cobra.Command) {
 	bindInputFlags(cmd)
 	v := commandConfig(cmd)
-	for _, name := range []string{"question", "field", "threshold", "uncertainty-margin", "max-records", "raw", "jsonl"} {
+	for _, name := range []string{"question", "field", "input-format", "output-format", "threshold", "uncertainty-margin", "max-records", "raw", "jsonl"} {
 		_ = v.BindPFlag(name, cmd.Flags().Lookup(name))
 	}
 }
