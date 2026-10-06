@@ -72,11 +72,28 @@ func validatePredicate(opts PredicateOptions) error {
 	}
 	return nil
 }
-func validateText(text string) error {
-	if strings.TrimSpace(text) == "" || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+func validateDecisionInput(text string, images []string) error {
+	if (strings.TrimSpace(text) == "" && len(images) == 0) || !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 		return fmt.Errorf("%w: input must be non-empty UTF-8 text without NUL bytes", ErrInvalidInput)
 	}
 	return nil
+}
+
+func evaluateDecision(ctx context.Context, provider Provider, text string, questions map[string]Question, images []string) (Response, error) {
+	if len(images) == 0 {
+		return provider.Evaluate(ctx, text, questions)
+	}
+	imageProvider, ok := provider.(interface {
+		EvaluateWithImages(context.Context, any, map[string]Question, []string) (Response, error)
+	})
+	if !ok {
+		return Response{}, fmt.Errorf("%w: provider does not support images", ErrInvalidInput)
+	}
+	var state any = map[string]any{}
+	if strings.TrimSpace(text) != "" {
+		state = text
+	}
+	return imageProvider.EvaluateWithImages(ctx, state, questions, images)
 }
 func probability(answers map[string]map[string]any, key string) (float64, error) {
 	answer, ok := answers[key]
@@ -91,12 +108,12 @@ func probability(answers map[string]map[string]any, key string) (float64, error)
 }
 
 // Eval evaluates named predicates in one provider request, returning results in question order.
-func Eval(ctx context.Context, provider Provider, text string, questions []NamedQuestion, opts PredicateOptions) (EvalResult, error) {
+func Eval(ctx context.Context, provider Provider, text string, questions []NamedQuestion, opts PredicateOptions, images ...string) (EvalResult, error) {
 	var zero EvalResult
 	if err := validatePredicate(opts); err != nil {
 		return zero, err
 	}
-	if err := validateText(text); err != nil {
+	if err := validateDecisionInput(text, images); err != nil {
 		return zero, err
 	}
 	if len(questions) < 1 || len(questions) > 255 {
@@ -112,7 +129,7 @@ func Eval(ctx context.Context, provider Provider, text string, questions []Named
 		}
 		request[question.Name] = Question{Type: "noul", Instructions: question.Instructions}
 	}
-	response, err := provider.Evaluate(ctx, text, request)
+	response, err := evaluateDecision(ctx, provider, text, request, images)
 	if err != nil {
 		return zero, err
 	}
@@ -135,9 +152,9 @@ func Eval(ctx context.Context, provider Provider, text string, questions []Named
 }
 
 // Choose selects among named options, preserving confidence and all probabilities.
-func Choose(ctx context.Context, provider Provider, text, question string, options []NamedOption, minConfidence float64) (ChoiceResult, error) {
+func Choose(ctx context.Context, provider Provider, text, question string, options []NamedOption, minConfidence float64, images ...string) (ChoiceResult, error) {
 	var zero ChoiceResult
-	if err := validateText(text); err != nil {
+	if err := validateDecisionInput(text, images); err != nil {
 		return zero, err
 	}
 	if strings.TrimSpace(question) == "" || !validProbability(minConfidence) || len(options) < 2 || len(options) > 255 {
@@ -153,7 +170,7 @@ func Choose(ctx context.Context, provider Provider, text, question string, optio
 		}
 		criteria[option.Name] = option.Description
 	}
-	response, err := provider.Evaluate(ctx, text, map[string]Question{"result": {Type: "choice", Instructions: question, Criteria: criteria}})
+	response, err := evaluateDecision(ctx, provider, text, map[string]Question{"result": {Type: "choice", Instructions: question, Criteria: criteria}}, images)
 	if err != nil {
 		return zero, err
 	}
@@ -181,9 +198,9 @@ func Choose(ctx context.Context, provider Provider, text, question string, optio
 }
 
 // Score evaluates ordered rubric levels; the score ranges from zero to len(levels)-1.
-func Score(ctx context.Context, provider Provider, text, question string, levels []string, minConfidence float64) (ScoreResult, error) {
+func Score(ctx context.Context, provider Provider, text, question string, levels []string, minConfidence float64, images ...string) (ScoreResult, error) {
 	var zero ScoreResult
-	if err := validateText(text); err != nil {
+	if err := validateDecisionInput(text, images); err != nil {
 		return zero, err
 	}
 	if strings.TrimSpace(question) == "" || !validProbability(minConfidence) || len(levels) < 2 || len(levels) > 255 {
@@ -194,7 +211,7 @@ func Score(ctx context.Context, provider Provider, text, question string, levels
 			return zero, fmt.Errorf("%w: levels must be non-empty", ErrInvalidInput)
 		}
 	}
-	response, err := provider.Evaluate(ctx, text, map[string]Question{"result": {Type: "score", Instructions: question, Criteria: levels}})
+	response, err := evaluateDecision(ctx, provider, text, map[string]Question{"result": {Type: "score", Instructions: question, Criteria: levels}}, images)
 	if err != nil {
 		return zero, err
 	}

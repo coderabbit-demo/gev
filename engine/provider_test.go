@@ -43,9 +43,10 @@ func TestClientRequestAndRetries(t *testing.T) {
 		var payload struct {
 			Model     string              `json:"model"`
 			State     string              `json:"state"`
+			Images    []string            `json:"images"`
 			Questions map[string]Question `json:"questions"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Model != "local-jev" || payload.State != "data" || payload.Questions["result"].Type != "noul" {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Model != "local-jev" || payload.State != "data" || payload.Images != nil || payload.Questions["result"].Type != "noul" {
 			t.Errorf("bad payload %+v: %v", payload, err)
 		}
 		if calls.Load() == 1 {
@@ -59,6 +60,29 @@ func TestClientRequestAndRetries(t *testing.T) {
 	result, err := client.Evaluate(context.Background(), "data", map[string]Question{"result": {Type: "noul", Instructions: "x"}})
 	if err != nil || calls.Load() != 2 || result.Answers["result"]["noul"] != .9 {
 		t.Fatalf("result %+v, calls %d, error %v", result, calls.Load(), err)
+	}
+}
+
+func TestClientImagePayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if string(payload["state"]) != `{}` {
+			t.Errorf("image-only request state: %s", payload["state"])
+		}
+		var images []string
+		if err := json.Unmarshal(payload["images"], &images); err != nil || len(images) != 2 || images[0] != "AQI=" || images[1] != "AwQ=" {
+			t.Errorf("images=%v err=%v", images, err)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"q":{"noul":0.9}}}`))
+	}))
+	defer server.Close()
+	client := &Client{URL: server.URL, Model: "test", Timeout: time.Second}
+	result, err := client.EvaluateWithImages(context.Background(), map[string]any{}, map[string]Question{"q": {Type: "noul"}}, []string{"AQI=", "AwQ="})
+	if err != nil || result.Answers["q"]["noul"] != .9 {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

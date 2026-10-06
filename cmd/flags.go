@@ -36,8 +36,17 @@ func bindInputFlags(cmd *cobra.Command) {
 	_ = v.BindPFlag("file", cmd.Flags().Lookup("file"))
 }
 
+func imageFlags(cmd *cobra.Command) {
+	cmd.Flags().StringArray("image", nil, "image file to include (repeat for multiple images)")
+}
+
+func bindImageFlags(cmd *cobra.Command) {
+	_ = commandConfig(cmd).BindPFlag("image", cmd.Flags().Lookup("image"))
+}
+
 func evalFlags(cmd *cobra.Command) {
 	inputFlags(cmd)
+	imageFlags(cmd)
 	cmd.Flags().StringArray("question", nil, "NAME=INSTRUCTIONS (repeat for multiple questions)")
 	cmd.Flags().Float64("threshold", .70, "true probability threshold")
 	cmd.Flags().Float64("uncertainty-margin", .05, "uncertain region around the threshold")
@@ -45,6 +54,7 @@ func evalFlags(cmd *cobra.Command) {
 
 func bindEvalFlags(cmd *cobra.Command) {
 	bindInputFlags(cmd)
+	bindImageFlags(cmd)
 	v := commandConfig(cmd)
 	_ = v.BindPFlag("question", cmd.Flags().Lookup("question"))
 	_ = v.BindPFlag("threshold", cmd.Flags().Lookup("threshold"))
@@ -55,6 +65,7 @@ func bindEvalCmdFlags(cmd *cobra.Command, _ []string) { bindEvalFlags(cmd) }
 
 func chooseFlags(cmd *cobra.Command) {
 	inputFlags(cmd)
+	imageFlags(cmd)
 	cmd.Flags().String("question", "", "question instructions")
 	cmd.Flags().StringArray("option", nil, "NAME=DESCRIPTION (repeat for each option)")
 	cmd.Flags().Float64("min-confidence", .50, "minimum confidence for a definite choice")
@@ -62,6 +73,7 @@ func chooseFlags(cmd *cobra.Command) {
 
 func bindChooseFlags(cmd *cobra.Command) {
 	bindInputFlags(cmd)
+	bindImageFlags(cmd)
 	v := commandConfig(cmd)
 	_ = v.BindPFlag("question", cmd.Flags().Lookup("question"))
 	_ = v.BindPFlag("option", cmd.Flags().Lookup("option"))
@@ -72,6 +84,7 @@ func bindChooseCmdFlags(cmd *cobra.Command, _ []string) { bindChooseFlags(cmd) }
 
 func scoreFlags(cmd *cobra.Command) {
 	inputFlags(cmd)
+	imageFlags(cmd)
 	cmd.Flags().String("question", "", "question instructions")
 	cmd.Flags().StringArray("level", nil, "ordered level description (repeat)")
 	cmd.Flags().Float64("min-confidence", .50, "minimum confidence for a definite score")
@@ -79,6 +92,7 @@ func scoreFlags(cmd *cobra.Command) {
 
 func bindScoreFlags(cmd *cobra.Command) {
 	bindInputFlags(cmd)
+	bindImageFlags(cmd)
 	v := commandConfig(cmd)
 	_ = v.BindPFlag("question", cmd.Flags().Lookup("question"))
 	_ = v.BindPFlag("level", cmd.Flags().Lookup("level"))
