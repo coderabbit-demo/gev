@@ -97,6 +97,11 @@ func LoadAPIKey() (string, error) {
 }
 
 func (c *Client) Evaluate(ctx context.Context, state any, questions map[string]Question) (Response, error) {
+	return c.EvaluateWithImages(ctx, state, questions, nil)
+}
+
+// EvaluateWithImages adds base64-encoded images to a decision request.
+func (c *Client) EvaluateWithImages(ctx context.Context, state any, questions map[string]Question, images []string) (Response, error) {
 	var zero Response
 	if c.Timeout <= 0 || c.Retries < 0 || c.Retries > 5 || c.URL == "" || c.Model == "" {
 		return zero, errors.New("invalid provider configuration")
@@ -114,7 +119,12 @@ func (c *Client) Evaluate(ctx context.Context, state any, questions map[string]Q
 			return zero, err
 		}
 	}
-	payload, err := json.Marshal(map[string]any{"state": state, "model": c.Model, "questions": questions})
+	request := map[string]any{"model": c.Model, "questions": questions}
+	request["state"] = state
+	if len(images) > 0 {
+		request["images"] = images
+	}
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return zero, errors.New("cannot encode request")
 	}

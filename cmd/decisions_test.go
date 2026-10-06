@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"net/http"
@@ -68,6 +69,72 @@ func TestEvalAndInput(t *testing.T) {
 	code, _, _, _ = invoke(t, answer(`{"answers":{"risk":{"noul":0.68}}}`), "data", "eval", "--question", "risk=x")
 	if code != 3 {
 		t.Errorf("borderline code %d", code)
+	}
+}
+
+func TestImageRequests(t *testing.T) {
+	first := filepath.Join(t.TempDir(), "first.png")
+	second := filepath.Join(t.TempDir(), "second.jpg")
+	for path, data := range map[string][]byte{first: {137, 80, 78, 71, 13, 10, 26, 10, 0}, second: {255, 216, 255, 224, 0, 0}} {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, answer string
+		args         []string
+	}{
+		{"eval", `{"answers":{"q":{"noul":0.9}}}`, []string{"eval", "--question", "q=Describe the image"}},
+		{"choose", `{"answers":{"result":{"choice":"a","probabilities":{"a":0.9,"b":0.1},"confidence":0.9}}}`, []string{"choose", "--question", "Which one?", "--option", "a=first", "--option", "b=second"}},
+		{"score", `{"answers":{"result":{"score":1,"probabilities":[0.1,0.9],"confidence":0.9}}}`, []string{"score", "--question", "How good?", "--level", "bad", "--level", "good"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, text := range []string{"", "caption"} {
+				args := append(append([]string{}, tc.args...), "--image", first, "--image", second)
+				if text != "" {
+					args = append(args, "--text", text)
+				}
+				code, _, _, calls := invoke(t, func(w http.ResponseWriter, r *http.Request) {
+					var request map[string]json.RawMessage
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Fatal(err)
+					}
+					var images []string
+					if err := json.Unmarshal(request["images"], &images); err != nil {
+						t.Fatal(err)
+					}
+					if len(images) != 2 || images[0] != base64.StdEncoding.EncodeToString([]byte{137, 80, 78, 71, 13, 10, 26, 10, 0}) || images[1] != base64.StdEncoding.EncodeToString([]byte{255, 216, 255, 224, 0, 0}) {
+						t.Errorf("unexpected images: %v", images)
+					}
+					if text == "" && string(request["state"]) != `{}` || text != "" && string(request["state"]) != `"caption"` {
+						t.Errorf("unexpected state: %s", request["state"])
+					}
+					_, _ = w.Write([]byte(tc.answer))
+				}, "", args...)
+				if code != 0 || calls != 1 {
+					t.Errorf("text=%q code=%d calls=%d", text, code, calls)
+				}
+			}
+		})
+	}
+}
+
+func TestInvalidImageInput(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "empty.png")
+	if err := os.WriteFile(empty, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", empty, filepath.Join(t.TempDir(), "missing.png")} {
+		code, _, _, calls := invoke(t, answer(`{}`), "", "eval", "--question", "q=x", "--image", path)
+		if code != 2 || calls != 0 {
+			t.Errorf("path=%q code=%d calls=%d", path, code, calls)
+		}
+	}
+	for _, command := range []string{"filter", "guard"} {
+		code, _, _, calls := invoke(t, answer(`{}`), "", command, "--image", empty)
+		if code != 2 || calls != 0 {
+			t.Errorf("command=%s code=%d calls=%d", command, code, calls)
+		}
 	}
 }
 

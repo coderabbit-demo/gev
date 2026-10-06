@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -55,11 +57,11 @@ func evaluatePredicate(cmd *cobra.Command, _ []string, provider engine.Provider,
 		}
 		ordered = append(ordered, engine.NamedQuestion{Name: name, Instructions: instructions})
 	}
-	text, err := readInput(cmd, maxBytes)
+	text, images, err := readDecisionInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	result, err := engine.Eval(cmd.Context(), provider, text, ordered, engine.PredicateOptions{Threshold: threshold, UncertaintyMargin: margin})
+	result, err := engine.Eval(cmd.Context(), provider, text, ordered, engine.PredicateOptions{Threshold: threshold, UncertaintyMargin: margin}, images...)
 	if err != nil {
 		return decision{}, decisionError(err)
 	}
@@ -104,11 +106,11 @@ func evaluateChoice(cmd *cobra.Command, _ []string, provider engine.Provider, ma
 		}
 		options = append(options, engine.NamedOption{Name: name, Description: desc})
 	}
-	text, err := readInput(cmd, maxBytes)
+	text, images, err := readDecisionInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	result, err := engine.Choose(cmd.Context(), provider, text, question, options, min)
+	result, err := engine.Choose(cmd.Context(), provider, text, question, options, min, images...)
 	if err != nil {
 		return decision{}, decisionError(err)
 	}
@@ -140,11 +142,11 @@ func evaluateScore(cmd *cobra.Command, _ []string, provider engine.Provider, max
 		return decision{}, inputError("score requires --question")
 	}
 	levels := commandConfig(cmd).GetStringSlice("level")
-	text, err := readInput(cmd, maxBytes)
+	text, images, err := readDecisionInput(cmd, maxBytes)
 	if err != nil {
 		return decision{}, err
 	}
-	result, err := engine.Score(cmd.Context(), provider, text, question, levels, min)
+	result, err := engine.Score(cmd.Context(), provider, text, question, levels, min, images...)
 	if err != nil {
 		return decision{}, decisionError(err)
 	}
@@ -478,6 +480,45 @@ func probabilityFlag(cmd *cobra.Command, name string) (float64, error) {
 }
 
 func readInput(cmd *cobra.Command, maxBytes int) (string, error) {
+	return readTextInput(cmd, maxBytes, false)
+}
+
+func readDecisionInput(cmd *cobra.Command, maxBytes int) (string, []string, error) {
+	paths := commandConfig(cmd).GetStringSlice("image")
+	images := make([]string, 0, len(paths))
+	const maxImageBytes = 10 << 20
+	remaining := int64(maxImageBytes)
+	for _, path := range paths {
+		if path == "" {
+			return "", nil, inputError("--image requires a file path")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return "", nil, inputError("cannot read image file: " + err.Error())
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, remaining+1))
+		_ = file.Close()
+		if readErr != nil {
+			return "", nil, inputError("cannot read image file: " + readErr.Error())
+		}
+		if int64(len(data)) > remaining {
+			return "", nil, inputError("images exceed 10 MiB total")
+		}
+		if len(data) == 0 {
+			return "", nil, inputError("image file is empty")
+		}
+		mime := http.DetectContentType(data)
+		if mime != "image/png" && mime != "image/jpeg" && mime != "image/webp" {
+			return "", nil, inputError("--image must be a PNG, JPEG, or WebP file")
+		}
+		remaining -= int64(len(data))
+		images = append(images, base64.StdEncoding.EncodeToString(data))
+	}
+	text, err := readTextInput(cmd, maxBytes, len(images) > 0)
+	return text, images, err
+}
+
+func readTextInput(cmd *cobra.Command, maxBytes int, optional bool) (string, error) {
 	v := commandConfig(cmd)
 	textFlag := cmd.Flags().Changed("text") || v.InConfig("text") || os.Getenv("GEV_TEXT") != ""
 	fileFlag := cmd.Flags().Changed("file") || v.InConfig("file") || os.Getenv("GEV_FILE") != ""
@@ -499,6 +540,11 @@ func readInput(cmd *cobra.Command, maxBytes int) (string, error) {
 			return "", inputError("cannot read input file")
 		}
 	} else {
+		if optional && cmd.InOrStdin() == os.Stdin {
+			if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+				return "", nil
+			}
+		}
 		var err error
 		data, err = io.ReadAll(io.LimitReader(cmd.InOrStdin(), int64(maxBytes)+1))
 		if err != nil {
@@ -514,7 +560,7 @@ func readInput(cmd *cobra.Command, maxBytes int) (string, error) {
 	if !utf8.Valid(data) {
 		return "", inputError("input must be valid UTF-8 text")
 	}
-	if strings.TrimSpace(string(data)) == "" {
+	if !optional && strings.TrimSpace(string(data)) == "" {
 		return "", inputError("input is empty")
 	}
 	return string(data), nil

@@ -48,6 +48,9 @@ func TestImportableDecisions(t *testing.T) {
 	if _, err := engine.Eval(ctx, p, "data", nil, opts); !errors.Is(err, engine.ErrInvalidInput) {
 		t.Fatalf("invalid input error: %v", err)
 	}
+	if _, err := engine.Eval(ctx, p, "", []engine.NamedQuestion{{Name: "q", Instructions: "image?"}}, opts, "AQI="); !errors.Is(err, engine.ErrInvalidInput) {
+		t.Fatalf("provider without image support: %v", err)
+	}
 }
 
 func TestImportableGuardFailsClosed(t *testing.T) {
