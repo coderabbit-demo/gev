@@ -24,6 +24,15 @@ after configuring a TypeSafe API key or a compatible local endpoint.
   --field text
 
 ./gev guard --json < examples/guard-action.json
+
+./gev choose --image examples/truck.webp \
+  --question 'What is this a picture of?' \
+  --option truck='A pickup truck' \
+  --option car='A car' \
+  --option motorcycle='A motorcycle' \
+  --option other='Something else' \
+  --option semi='A semi truck'
+
 ```
 
 To try the [output policy](output.rego), add
