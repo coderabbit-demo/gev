@@ -416,6 +416,7 @@ func TestModelOverrideAndQuiet(t *testing.T) {
 
 func TestCustomEndpointModelAndEvalQuestion(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "do-not-forward")
+	t.Setenv("GEV_TOKEN", "")
 	t.Setenv("GEV_MODEL", "nimble")
 	code, out, _, calls := invoke(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "" {
@@ -437,6 +438,20 @@ func TestCustomEndpointModelAndEvalQuestion(t *testing.T) {
 	}, "", "eval", "--question", "risk=This describes a plausible account takeover", "--text", "Login from a new country, followed by payout changes.", "--json")
 	if code != 0 || calls != 1 || !strings.Contains(out, `"verdict":"true"`) {
 		t.Errorf("code=%d calls=%d output=%s", code, calls, out)
+	}
+}
+
+func TestCustomDecisionEndpointUsesGEVToken(t *testing.T) {
+	t.Setenv("GEV_TOKEN", "shared-token")
+	t.Setenv("TYPESAFE_API_KEY", "do-not-forward")
+	code, _, _, calls := invoke(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer shared-token" {
+			t.Errorf("unexpected authorization header: %q", got)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"risk":{"noul":0.9}}}`))
+	}, "data", "eval", "--question", "risk=x")
+	if code != 0 || calls != 1 {
+		t.Fatalf("code=%d calls=%d", code, calls)
 	}
 }
 

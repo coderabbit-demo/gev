@@ -50,6 +50,14 @@ func commandConfig(cmd *cobra.Command) *viper.Viper {
 	return cmd.Context().Value(configContextKey{}).(*viper.Viper)
 }
 
+func environmentValue(name string) string {
+	v := viper.New()
+	v.SetEnvPrefix("GEV")
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	v.AutomaticEnv()
+	return v.GetString(name)
+}
+
 func newRoot() *cobra.Command {
 	v := viper.New()
 	v.SetEnvPrefix("GEV")
@@ -72,7 +80,7 @@ func newRoot() *cobra.Command {
 		}
 		return nil
 	}
-	r.AddCommand(newEval(), newChoose(), newScore(), newFilter(), newGuard("guard"), newGuard("check"))
+	r.AddCommand(newEval(), newChoose(), newScore(), newFilter(), newExtract(), newGuard("guard"), newGuard("check"))
 	return r
 }
 
@@ -89,7 +97,7 @@ func Execute() {
 	if status.kind != "" && !hasArg(args, "--quiet") {
 		command := ""
 		for _, arg := range args {
-			if arg == "eval" || arg == "choose" || arg == "score" || arg == "filter" || arg == "guard" || arg == "check" {
+			if arg == "eval" || arg == "choose" || arg == "score" || arg == "filter" || arg == "extract" || arg == "guard" || arg == "check" {
 				command = arg
 				break
 			}

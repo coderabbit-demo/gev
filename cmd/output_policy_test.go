@@ -108,6 +108,16 @@ func TestOutputPolicyGuardCannotAlterExitCode(t *testing.T) {
 	}
 }
 
+func TestExtractPolicyWithChangedShapeFallsBackToJSON(t *testing.T) {
+	path := outputPolicyPath(t, `package gev.output
+result := {"note": "changed"}`)
+	response := answer(`{"model":"clairic-27b","answers":{"total":{"type":"number","value":10,"confidence":0.9}},"truncated":false,"usage":{"input_tokens":1,"output_tokens":0}}`)
+	code, out, _, calls := invoke(t, response, "receipt", "extract", "--field", "total=number", "--output-policy", path)
+	if code != 0 || calls != 1 || !strings.Contains(out, `"note": "changed"`) || strings.Contains(out, "total=") {
+		t.Fatalf("changed policy result: code=%d calls=%d output=%q", code, calls, out)
+	}
+}
+
 func TestOutputPolicyErrorsDoNotEmitUnfilteredOutput(t *testing.T) {
 	response := answer(`{"answers":{"result":{"choice":"a","probabilities":{"a":0.9,"b":0.1},"confidence":0.9}}}`)
 	args := []string{"choose", "--question", "Which?", "--option", "a=first", "--option", "b=second"}

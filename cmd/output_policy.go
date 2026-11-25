@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -66,12 +67,55 @@ func outputNumber(value any) (float64, bool) {
 	}
 }
 
+// extractAnswersHuman keeps each value on one line. JSON quotes and escapes strings.
+func extractAnswersHuman(answers map[string]any) (string, bool) {
+	names := make([]string, 0, len(answers))
+	for name := range answers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		answer, ok := answers[name].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		if typ, ok := answer["type"].(string); !ok || typ == "" {
+			return "", false
+		}
+		value, ok := answer["value"]
+		if !ok {
+			return "", false
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", false
+		}
+		confidence := "n/a"
+		if raw, present := answer["confidence"]; present && raw != nil {
+			p, ok := outputNumber(raw)
+			if !ok || p < 0 || p > 1 {
+				return "", false
+			}
+			confidence = fmt.Sprintf("%.3f", p)
+		}
+		lines = append(lines, name+"="+string(encoded)+" confidence="+confidence)
+	}
+	return strings.Join(lines, "\n"), true
+}
+
 func policyHuman(command string, value any) (string, bool) {
 	data, ok := value.(map[string]any)
 	if !ok {
 		return "", false
 	}
 	switch command {
+	case "extract":
+		answers, ok := data["answers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		return extractAnswersHuman(answers)
 	case "eval":
 		items, ok := data["results"].([]any)
 		if !ok {

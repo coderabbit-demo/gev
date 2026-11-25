@@ -1,0 +1,9 @@
+Invoice INV-2291
+Vendor: Northwind Supply
+Issued: 2026-09-02
+Terms: net 30
+Bill to: Harbor Goods
+Items: 4 pallets at $250.00 each
+Shipping: $80.00
+Amount due: $1080.00
+Contacts: Dana Ruiz and Priya Shah

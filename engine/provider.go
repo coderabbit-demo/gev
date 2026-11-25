@@ -31,6 +31,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 type Question struct {
@@ -55,6 +57,8 @@ type Provider interface {
 	Evaluate(ctx context.Context, state any, questions map[string]Question) (Response, error)
 }
 
+// Client evaluates SystemOne decisions and extracts Clairic fields.
+// Set URL and Model for the operation that you call.
 type Client struct {
 	URL     string
 	Model   string
@@ -66,10 +70,19 @@ type Client struct {
 
 // Credentials follow the TypeSafe CLI convention; credentials never appear in returned errors.
 func LoadAPIKey() (string, error) {
-	if key := os.Getenv("TYPESAFE_API_KEY"); key != "" {
+	if key := sharedToken(); key != "" {
 		return key, nil
 	}
-	path := os.Getenv("TYPESAFE_CREDENTIALS_FILE")
+	v := viper.New()
+	v.SetEnvPrefix("GEV")
+	v.AutomaticEnv()
+	// Keep the TypeSafe-specific credential names as fallbacks.
+	_ = v.BindEnv("typesafe-api-key", "GEV_TYPESAFE_API_KEY", "TYPESAFE_API_KEY")
+	_ = v.BindEnv("typesafe-credentials-file", "GEV_TYPESAFE_CREDENTIALS_FILE", "TYPESAFE_CREDENTIALS_FILE")
+	if key := v.GetString("typesafe-api-key"); key != "" {
+		return key, nil
+	}
+	path := v.GetString("typesafe-credentials-file")
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -110,6 +123,13 @@ func LoadAPIKey() (string, error) {
 	return "", errors.New("TYPESAFE_API_KEY not found")
 }
 
+func sharedToken() string {
+	v := viper.New()
+	v.SetEnvPrefix("GEV")
+	v.AutomaticEnv()
+	return v.GetString("token")
+}
+
 func (c *Client) Evaluate(ctx context.Context, state any, questions map[string]Question) (Response, error) {
 	return c.EvaluateWithImages(ctx, state, questions, nil)
 }
@@ -124,6 +144,9 @@ func (c *Client) EvaluateWithImages(ctx context.Context, state any, questions ma
 	endpoint, err := url.Parse(c.URL)
 	if err != nil || endpoint.Hostname() == "" {
 		return zero, errors.New("invalid provider URL")
+	}
+	if key == "" {
+		key = sharedToken()
 	}
 	// A TypeSafe credential must never be sent to an arbitrary custom endpoint.
 	if key == "" && endpoint.Hostname() == "api.typesafe.ai" {
@@ -144,7 +167,8 @@ func (c *Client) EvaluateWithImages(ctx context.Context, state any, questions ma
 	}
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{}
+		// Do not forward a bearer token to a redirect target.
+		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	started := time.Now()
 	for attempt := 0; attempt <= c.Retries; attempt++ {
