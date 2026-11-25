@@ -100,6 +100,22 @@ func TestClientImagePayload(t *testing.T) {
 	}
 }
 
+func TestClientUsesSharedTokenForCustomEndpoint(t *testing.T) {
+	t.Setenv("GEV_TOKEN", "shared-token")
+	t.Setenv("TYPESAFE_API_KEY", "typesafe-only")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer shared-token" {
+			t.Errorf("unexpected authorization header: %q", got)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"q":{"noul":0.9}}}`))
+	}))
+	defer server.Close()
+	client := &Client{URL: server.URL, Model: "test", Timeout: time.Second}
+	if _, err := client.Evaluate(context.Background(), "data", map[string]Question{"q": {Type: "noul"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientDoesNotRetryAuthOrMalformedBody(t *testing.T) {
 	for _, response := range []struct {
 		status int
@@ -121,6 +137,9 @@ func TestClientDoesNotRetryAuthOrMalformedBody(t *testing.T) {
 }
 
 func TestCredentials(t *testing.T) {
+	t.Setenv("GEV_TOKEN", "")
+	t.Setenv("GEV_TYPESAFE_API_KEY", "")
+	t.Setenv("GEV_TYPESAFE_CREDENTIALS_FILE", "")
 	path := filepath.Join(t.TempDir(), "credentials.env")
 	if err := os.WriteFile(path, []byte("export TYPESAFE_API_KEY='file-key'\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -135,5 +154,23 @@ func TestCredentials(t *testing.T) {
 	key, err = LoadAPIKey()
 	if err != nil || key != "env-key" {
 		t.Fatalf("key=%q err=%v", key, err)
+	}
+	t.Setenv("GEV_TYPESAFE_API_KEY", "gev-key")
+	key, err = LoadAPIKey()
+	if err != nil || key != "gev-key" {
+		t.Fatalf("GEV key=%q err=%v", key, err)
+	}
+	t.Setenv("GEV_TYPESAFE_API_KEY", "")
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("GEV_TYPESAFE_CREDENTIALS_FILE", path)
+	t.Setenv("TYPESAFE_CREDENTIALS_FILE", "missing")
+	key, err = LoadAPIKey()
+	if err != nil || key != "file-key" {
+		t.Fatalf("GEV credentials file key=%q err=%v", key, err)
+	}
+	t.Setenv("GEV_TOKEN", "shared-key")
+	key, err = LoadAPIKey()
+	if err != nil || key != "shared-key" {
+		t.Fatalf("shared token key=%q err=%v", key, err)
 	}
 }

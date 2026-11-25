@@ -404,7 +404,7 @@ func run(cmd *cobra.Command, args []string, fn runner) error {
 	if model == "" || url == "" {
 		return inputError("model and api-url must be non-empty")
 	}
-	provider := &engine.Client{Model: model, URL: url, Timeout: time.Duration(timeout * float64(time.Second)), Retries: retries}
+	provider := &engine.Client{Model: model, URL: url, APIKey: v.GetString("token"), Timeout: time.Duration(timeout * float64(time.Second)), Retries: retries}
 	policyPath := v.GetString("output-policy")
 	if cmd.Root().PersistentFlags().Changed("output-policy") && policyPath == "" {
 		return inputError("--output-policy requires a file path")
@@ -498,6 +498,10 @@ func readInput(cmd *cobra.Command, maxBytes int) (string, error) {
 }
 
 func readDecisionInput(cmd *cobra.Command, maxBytes int) (string, []string, error) {
+	return readDecisionInputWithOptionalText(cmd, maxBytes, false)
+}
+
+func readDecisionInputWithOptionalText(cmd *cobra.Command, maxBytes int, optionalText bool) (string, []string, error) {
 	paths := commandConfig(cmd).GetStringSlice("image")
 	images := make([]string, 0, len(paths))
 	const maxImageBytes = 10 << 20
@@ -528,14 +532,14 @@ func readDecisionInput(cmd *cobra.Command, maxBytes int) (string, []string, erro
 		remaining -= int64(len(data))
 		images = append(images, base64.StdEncoding.EncodeToString(data))
 	}
-	text, err := readTextInput(cmd, maxBytes, len(images) > 0)
+	text, err := readTextInput(cmd, maxBytes, len(images) > 0 || optionalText)
 	return text, images, err
 }
 
 func readTextInput(cmd *cobra.Command, maxBytes int, optional bool) (string, error) {
 	v := commandConfig(cmd)
-	textFlag := cmd.Flags().Changed("text") || v.InConfig("text") || os.Getenv("GEV_TEXT") != ""
-	fileFlag := cmd.Flags().Changed("file") || v.InConfig("file") || os.Getenv("GEV_FILE") != ""
+	textFlag := cmd.Flags().Changed("text") || v.InConfig("text") || environmentValue("text") != ""
+	fileFlag := cmd.Flags().Changed("file") || v.InConfig("file") || environmentValue("file") != ""
 	if textFlag && fileFlag {
 		return "", inputError("--text and --file cannot be combined")
 	}

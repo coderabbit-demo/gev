@@ -22,7 +22,7 @@ import "github.com/spf13/cobra"
 func rootFlags(cmd *cobra.Command) {
 	flags := cmd.PersistentFlags()
 	flags.String("model", "jev-latest", "provider model name (GEV_MODEL)")
-	flags.String("api-url", "https://api.typesafe.ai/v1/systemone", "SystemOne-compatible API URL (GEV_API_URL)")
+	flags.String("api-url", "https://api.typesafe.ai/v1/systemone", "API URL (SystemOne for decisions; Clairic for extract; GEV_API_URL)")
 	flags.Float64("timeout", 10, "per-attempt provider timeout in seconds")
 	flags.Int("retries", 2, "transient retry count (0-5)")
 	flags.Int("max-input-bytes", 1_000_000, "maximum UTF-8 input bytes")
@@ -56,6 +56,14 @@ func imageFlags(cmd *cobra.Command) {
 
 func bindImageFlags(cmd *cobra.Command) {
 	_ = commandConfig(cmd).BindPFlag("image", cmd.Flags().Lookup("image"))
+}
+
+func documentFlags(cmd *cobra.Command) {
+	cmd.Flags().StringArray("document", nil, "PDF file to include (repeat for multiple documents)")
+}
+
+func bindDocumentFlags(cmd *cobra.Command) {
+	_ = commandConfig(cmd).BindPFlag("document", cmd.Flags().Lookup("document"))
 }
 
 func evalFlags(cmd *cobra.Command) {
