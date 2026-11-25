@@ -26,7 +26,18 @@ You can also set `GEV_API_URL` and `GEV_MODEL`. Repeat `--question NAME=INSTRUCT
 
 The CLI sends `{ "model": "nimble", "state": "...", "questions": { "takeover": { "type": "noul", "instructions": "..." } } }`. The server must accept this format. It must return `answers.takeover.noul`. A different URL does not add support for Ollama's native `/api/generate` protocol.
 
-If you set `GEV_TOKEN`, the CLI sends it as a bearer token to a custom endpoint. The CLI does not send TypeSafe-specific fallback credentials to a custom endpoint. Check the custom URL before you set `GEV_TOKEN`. Use `--config path` to supply a JSON configuration file. Flags take precedence over configuration and environment values. You can also use `--timeout` (seconds, default 10), `--retries` (default 2, maximum 5), `--max-input-bytes` (default 1,000,000), `--json`, and `--quiet`.
+If you set `GEV_TOKEN`, the CLI sends it as a bearer token to a custom endpoint. The CLI does not send TypeSafe-specific fallback credentials to a custom endpoint. Check the custom URL before you set `GEV_TOKEN`.
+
+By default, the CLI looks for `$HOME/.gev.json`, `$HOME/.gev.yaml`, or `$HOME/.gev.toml`. Viper also supports its other config file formats. If no home config exists, the CLI continues without one. Set `--config path` or `GEV_CONFIG` to use a specific file instead. The CLI reports an error if it cannot read or parse a selected file. Flags take precedence over environment values. Environment values take precedence over config files. A JSON home config can contain these settings:
+
+```json
+{
+  "cloudflare-account-id": "your-account-id",
+  "token": "your-api-token"
+}
+```
+
+Keep token files out of Git. Set their file permissions to `600`. Prefer `GEV_TOKEN` if you do not want a token in a file. You can also use `--timeout` (seconds, default 10), `--retries` (default 2, maximum 5), `--max-input-bytes` (default 1,000,000), `--json`, and `--quiet`.
 
 ## Commands
 

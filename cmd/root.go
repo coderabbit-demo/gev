@@ -72,9 +72,20 @@ func newRoot() *cobra.Command {
 	rootFlags(r)
 	r.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		bindRootFlags(cmd)
-		if file := v.GetString("config"); file != "" {
+		file := v.GetString("config")
+		if file != "" {
 			v.SetConfigFile(file)
-			if err := v.ReadInConfig(); err != nil {
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return inputError("cannot locate home directory for config file")
+			}
+			v.AddConfigPath(home)
+			v.SetConfigName(".gev")
+		}
+		if err := v.ReadInConfig(); err != nil {
+			var notFound viper.ConfigFileNotFoundError
+			if file != "" || !errors.As(err, &notFound) {
 				return inputError("cannot read config file")
 			}
 		}

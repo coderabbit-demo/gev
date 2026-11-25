@@ -30,6 +30,8 @@ import (
 
 func invoke(t *testing.T, handler http.HandlerFunc, stdin string, args ...string) (int, string, string, int) {
 	t.Helper()
+	// Do not load the developer's home config in CLI tests.
+	t.Setenv("HOME", t.TempDir())
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; handler(w, r) }))
 	defer server.Close()

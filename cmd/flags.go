@@ -28,7 +28,7 @@ func rootFlags(cmd *cobra.Command) {
 	flags.Int("max-input-bytes", 1_000_000, "maximum UTF-8 input bytes")
 	flags.Bool("json", false, "machine-readable output (JSONL for filter)")
 	flags.Bool("quiet", false, "emit no output or diagnostics")
-	flags.String("config", "", "optional JSON configuration file")
+	flags.String("config", "", "config file (default: $HOME/.gev.json, .gev.yaml, or .gev.toml)")
 	flags.String("output-policy", "", "Rego policy file to filter the rendered result")
 }
 
