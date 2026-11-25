@@ -69,6 +69,7 @@ func TestClientExtractRejectsDecisionConfiguration(t *testing.T) {
 	for _, tc := range []struct{ url, model string }{
 		{"https://api.typesafe.ai/v1/systemone", "jev-latest"},
 		{"https://api.typesafe.ai/v1/systemone", "clairic"},
+		{"https://api.typesafe.ai/v1/systemone", "clairic-flash"},
 		{"https://example.com/v1/systemone", "jev-latest"},
 	} {
 		client := &Client{URL: tc.url, Model: tc.model, Timeout: time.Second}
@@ -76,6 +77,31 @@ func TestClientExtractRejectsDecisionConfiguration(t *testing.T) {
 		if !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("URL=%q model=%q: expected invalid input, got %v", tc.url, tc.model, err)
 		}
+	}
+}
+
+func TestClientExtractFlash(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model  string                     `json:"model"`
+			State  string                     `json:"state"`
+			Fields map[string]json.RawMessage `json:"fields"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Model != "clairic-flash" || request.State != "Total: $12" || len(request.Fields) != 1 {
+			t.Errorf("invalid Flash request: %+v", request)
+		}
+		_, _ = w.Write([]byte(`{"model":"clairic-flash","answers":{"total":{"type":"number","value":12,"confidence":0.9}},"truncated":false,"usage":{"input_tokens":3,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	client := &Client{URL: server.URL, Model: "clairic-flash", Timeout: time.Second}
+	result, err := client.Extract(context.Background(), ExtractionRequest{
+		State: "Total: $12", Fields: map[string]json.RawMessage{"total": json.RawMessage(`{"type":"number"}`)},
+	})
+	if err != nil || result.Model != "clairic-flash" || !strings.Contains(string(result.Answers["total"]), `"value":12`) {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

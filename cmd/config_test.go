@@ -147,6 +147,55 @@ func TestHomeConfigPrecedence(t *testing.T) {
 	}
 }
 
+func TestExtractFlashModelFromEnvAndConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GEV_CONFIG", "")
+	t.Setenv("GEV_API_URL", "")
+	t.Setenv("GEV_MODEL", "")
+	t.Setenv("GEV_TOKEN", "")
+	var models []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		models = append(models, request.Model)
+		_, _ = w.Write([]byte(`{"model":"clairic-flash","answers":{"total":{"type":"number","value":12}},"truncated":false,"usage":{"input_tokens":3,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	config := filepath.Join(t.TempDir(), "flash.json")
+	if err := os.WriteFile(config, []byte(fmt.Sprintf(`{"api-url":%q,"model":"clairic-flash"}`, server.URL)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"extract", "--text", "Total: $12", "--field", "total=number"}
+	if err, _ := executeConfigured(t, append(args, "--config", config)...); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GEV_MODEL", "clairic-flash")
+	t.Setenv("GEV_API_URL", server.URL)
+	if err, _ := executeConfigured(t, args...); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0] != "clairic-flash" || models[1] != "clairic-flash" {
+		t.Fatalf("unexpected models: %v", models)
+	}
+}
+
+func TestExtractFlashRequiresCustomEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GEV_CONFIG", "")
+	t.Setenv("GEV_API_URL", "")
+	t.Setenv("GEV_MODEL", "")
+	t.Setenv("GEV_CLOUDFLARE_ACCOUNT_ID", "test-account")
+	err, _ := executeConfigured(t, "extract", "--text", "Total: $12", "--field", "total=number", "--model", "clairic-flash")
+	var status *exitError
+	if !errors.As(err, &status) || status.code != 2 || !strings.Contains(status.message, "--api-url") {
+		t.Fatalf("expected custom endpoint error, got %v", err)
+	}
+}
+
 func TestDefaultConfigErrors(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

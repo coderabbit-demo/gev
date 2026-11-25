@@ -26,6 +26,30 @@ import (
 
 const extractionResponse = `{"success":true,"result":{"model":"clairic-27b","answers":{"invoice_number":{"type":"text","value":"INV-2291","confidence":0.99},"total":{"type":"number","value":1080}},"truncated":false,"usage":{"input_tokens":20,"output_tokens":0,"passes":1}}}`
 
+func TestExtractFlashModelFlag(t *testing.T) {
+	t.Setenv("GEV_MODEL", "")
+	t.Setenv("GEV_TOKEN", "")
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Model != "clairic-flash" {
+			t.Errorf("model=%q err=%v", request.Model, err)
+		}
+		_, _ = w.Write([]byte(`{"model":"clairic-flash","answers":{"total":{"type":"number","value":12}},"truncated":false,"usage":{"input_tokens":3,"output_tokens":1}}`))
+	}
+	code, out, _, calls := invoke(t, handler, "", "--model", "clairic-flash", "extract", "--text", "Total: $12", "--field", "total=number", "--json")
+	var result struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || calls != 1 || result.Model != "clairic-flash" {
+		t.Fatalf("code=%d calls=%d output=%q", code, calls, out)
+	}
+}
+
 func TestExtractSimpleAndDetailedFields(t *testing.T) {
 	t.Setenv("GEV_TOKEN", "")
 	path := filepath.Join(t.TempDir(), "fields.json")
@@ -390,6 +414,7 @@ result := {"command": input.command, "answers": {"safe": input.data.answers.safe
 }
 
 func TestExtractHostedEndpointRequiresCredentials(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GEV_API_URL", "")
 	t.Setenv("GEV_CLOUDFLARE_ACCOUNT_ID", "")
 	t.Setenv("GEV_TOKEN", "")

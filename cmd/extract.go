@@ -102,13 +102,16 @@ func evaluateExtract(cmd *cobra.Command, _ []string, provider engine.Provider, m
 	if configured(cmd, "model") {
 		model = v.GetString("model")
 	}
-	if model != clairicModel && model != "@cf/cloudflare/clairic" {
-		return decision{}, inputError("extract --model must be clairic or @cf/cloudflare/clairic")
+	if model != clairicModel && model != "@cf/cloudflare/clairic" && model != "clairic-flash" {
+		return decision{}, inputError("extract --model must be clairic, @cf/cloudflare/clairic, or clairic-flash")
 	}
 	endpoint := ""
 	if configured(cmd, "api-url") {
 		endpoint = v.GetString("api-url")
 	} else {
+		if model == "clairic-flash" {
+			return decision{}, inputError("extract --model clairic-flash requires --api-url or GEV_API_URL")
+		}
 		account := v.GetString("cloudflare-account-id")
 		if account == "" || strings.ContainsAny(account, "/?# ") {
 			return decision{}, inputError("GEV_CLOUDFLARE_ACCOUNT_ID is required for the hosted endpoint")
