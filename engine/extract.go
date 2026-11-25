@@ -62,8 +62,8 @@ type CloudflareExtractor struct {
 // Extract sends a Clairic request with the Client's URL, model, and HTTP settings.
 // TypeSafe decision endpoints do not support extraction.
 func (c *Client) Extract(ctx context.Context, input ExtractionRequest) (ExtractionResult, error) {
-	if c.Model != "clairic" && c.Model != "@cf/cloudflare/clairic" {
-		return ExtractionResult{}, fmt.Errorf("%w: extract requires model clairic or @cf/cloudflare/clairic", ErrInvalidInput)
+	if c.Model != "clairic" && c.Model != "@cf/cloudflare/clairic" && c.Model != "clairic-flash" {
+		return ExtractionResult{}, fmt.Errorf("%w: extract requires model clairic, @cf/cloudflare/clairic, or clairic-flash", ErrInvalidInput)
 	}
 	endpoint, err := url.Parse(c.URL)
 	if err == nil && endpoint.Hostname() == "api.typesafe.ai" {

@@ -128,7 +128,15 @@ total=1080 confidence=0.999
 
 The CLI writes string values as JSON strings. It writes lists and objects as compact JSON. If an answer has no `confidence`, the CLI writes `confidence=n/a`. Use `extract --json` for the full typed `answers`, `model`, `truncated`, and `usage` data. If the input does not determine an answer, its `value` can be null. A complete response returns exit code `0`. This includes responses with null answers. If `truncated` is true, the command returns `3`. Invalid input returns `2`. A provider failure returns `4`. Use `--output-policy` to filter the result before display.
 
-By default, `extract` uses model `clairic` and Cloudflare's Workers AI REST endpoint. Set `--api-url` or `GEV_API_URL` to use a custom endpoint. That endpoint must accept the same Clairic request and response format. If you set `GEV_TOKEN`, the CLI sends it as a bearer token to the custom endpoint. A custom URL does not add support for Ollama's native protocol. For this command, `--model` accepts `clairic` or `@cf/cloudflare/clairic`. The Cloudflare endpoint requires HTTPS.
+By default, `extract` uses model `clairic` and Cloudflare's Workers AI REST endpoint. Set `--api-url` or `GEV_API_URL` to use a custom endpoint. That endpoint must accept the same Clairic request and response format. If you set `GEV_TOKEN`, the CLI sends it as a bearer token to the custom endpoint. A custom URL does not add support for Ollama's native protocol. For this command, `--model`, the `model` config key, and `GEV_MODEL` accept `clairic`, `@cf/cloudflare/clairic`, or `clairic-flash`. The `clairic-flash` selector requires a custom endpoint. The Cloudflare endpoint requires HTTPS.
+
+For local Flash extraction on Apple Silicon, follow the [MLX model setup](https://huggingface.co/mlx-community/clairic-flash-4bit), then start `python server.py --port 8093` in the downloaded model directory. Use its System One endpoint:
+
+```sh
+./gev --api-url http://127.0.0.1:8093/v1/systemone --model clairic-flash --timeout 120 extract --text 'Invoice total: $12.' --field total=number --json
+```
+
+The server must be running before you call `gev`. The longer timeout helps with large documents and many fields. You can put `api-url` and `model` in your config file or set `GEV_API_URL` and `GEV_MODEL` instead. A configured token is also sent to the local server. The included server checks it only if you set `CLAIRIC_API_KEY`.
 
 ### Guard policies
 
